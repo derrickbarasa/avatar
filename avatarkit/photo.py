@@ -42,18 +42,23 @@ def _patch(img, cx, cy, hw, hh):
 def detect_face(img):
     """Return ((x, y, w, h), method): OpenCV's face box if available, else a centred guess."""
     h, w, _ = img.shape
+    why = "OpenCV not installed"
     try:
         import cv2
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-        faces = cascade.detectMultiScale(gray, 1.1, 5, minSize=(max(40, w // 10),) * 2)
-        if len(faces):
-            x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
-            return (int(x), int(y), int(fw), int(fh)), "OpenCV"
-    except Exception:
+        if not hasattr(cv2, "CascadeClassifier"):
+            why = "this OpenCV has no CascadeClassifier (use opencv-python-headless 4.x)"
+        else:
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+            faces = cascade.detectMultiScale(gray, 1.1, 5, minSize=(max(40, w // 12),) * 2)
+            if len(faces):
+                x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+                return (int(x), int(y), int(fw), int(fh)), "OpenCV"
+            why = "OpenCV found no face"
+    except ImportError:
         pass
     side = 0.38 * min(w, h)
-    return (int(w / 2 - side / 2), int(h * 0.42 - side / 2), int(side), int(side)), "centre guess"
+    return (int(w / 2 - side / 2), int(h * 0.42 - side / 2), int(side), int(side)), f"centre guess ({why})"
 
 
 def analyze(img, face_box=None):
@@ -63,6 +68,12 @@ def analyze(img, face_box=None):
     """
     (fx, fy, fw, fh), method = ((face_box, "given") if face_box else detect_face(img))
     notes = [f"face: {method}"]
+    # Undo over/under-exposure: assume the brightest 5% of the picture should be near white.
+    luma = (img[..., :3] @ np.array([0.299, 0.587, 0.114])) / 255.0
+    gain = float(np.clip(0.92 / max(np.percentile(luma, 95), 0.05), 0.5, 2.2))
+    if abs(gain - 1) > 0.08:
+        img = np.clip(img.astype(float) * gain, 0, 255).astype(np.uint8)
+        notes.append(f"exposure x{gain:.2f}")
     h, w, _ = img.shape
     result = {}
 

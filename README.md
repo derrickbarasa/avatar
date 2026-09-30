@@ -24,8 +24,9 @@ pip install -r requirements.txt
 python avatar.py
 ```
 
-Optional (`requirements-optional.txt`): OpenCV for better face detection in the
-photo import, and trimesh so the tests can load exported GLB files.
+Optional (`requirements-optional.txt`): OpenCV 4 for face detection in the photo
+import (OpenCV 5 dropped the classifier it uses), and trimesh / scikit-image for
+extra tests.
 
 ## Controls
 
@@ -75,8 +76,8 @@ python avatar.py --photo selfie.jpg                          # suggest options f
 `P` (or `--photo`) reads skin tone, hair colour, hair length and facial hair
 from a picture. It is a colour heuristic, not face recognition: with OpenCV
 installed it locates the face first, otherwise it assumes a centred face. It
-works best on an evenly lit, front-facing portrait with a plain background, and
-it won't detect eye colour, glasses or face shape.
+works best on an evenly lit, front-facing portrait. It corrects overall exposure
+but not coloured lighting, and it won't detect eye colour, glasses or face shape.
 
 ## Layout
 

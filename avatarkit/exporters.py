@@ -7,6 +7,18 @@ import numpy as np
 
 from .mathutil import euler_matrix, matrix_to_quat
 
+def compact(verts, normals, faces, colors=None):
+    """Drop vertices no triangle uses (hair/hat shells keep the whole head grid).
+
+    Unused vertices carry zero-length normals, which strict glTF loaders reject.
+    """
+    used = np.unique(faces)
+    remap = np.zeros(len(verts), np.uint32)
+    remap[used] = np.arange(len(used), dtype=np.uint32)
+    return (verts[used], normals[used], remap[faces].astype(np.uint32),
+            None if colors is None else colors[used])
+
+
 # ---------------------------------------------------------------------------
 # OBJ
 # ---------------------------------------------------------------------------
@@ -97,14 +109,14 @@ def export_glb(rig, path, pose=None):
         nodes.append(entry)
         prims = []
         for m in node.meshes:
-            local = (m.v - node.pivot.astype(np.float32)).astype(np.float32)
-            attrs = {"POSITION": buf.add(local, ARRAY_BUFFER, FLOAT, "VEC3", minmax=True),
-                     "NORMAL": buf.add(m.n, ARRAY_BUFFER, FLOAT, "VEC3")}
-            if m.colors is not None:
-                attrs["COLOR_0"] = buf.add(m.colors, ARRAY_BUFFER, FLOAT,
-                                           "VEC4" if m.colors.shape[1] == 4 else "VEC3")
+            v, n, f, cols = compact(m.v - node.pivot.astype(np.float32), m.n, m.f, m.colors)
+            attrs = {"POSITION": buf.add(v.astype(np.float32), ARRAY_BUFFER, FLOAT, "VEC3", minmax=True),
+                     "NORMAL": buf.add(n, ARRAY_BUFFER, FLOAT, "VEC3")}
+            if cols is not None:
+                attrs["COLOR_0"] = buf.add(cols, ARRAY_BUFFER, FLOAT,
+                                           "VEC4" if cols.shape[1] == 4 else "VEC3")
             prims.append({"attributes": attrs, "material": material(m),
-                          "indices": buf.add(m.f, ELEMENT_BUFFER, UINT, "SCALAR")})
+                          "indices": buf.add(f, ELEMENT_BUFFER, UINT, "SCALAR")})
         if prims:
             mesh_defs.append({"name": node.name, "primitives": prims})
             entry["mesh"] = len(mesh_defs) - 1

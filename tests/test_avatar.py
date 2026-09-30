@@ -223,6 +223,24 @@ class ExportTests(unittest.TestCase):
         children = {c for n in doc["nodes"] for c in n.get("children", [])}
         self.assertEqual(len(children), len(doc["nodes"]) - 1)
 
+    def test_glb_normals_are_unit_length_and_vertices_all_used(self):
+        # Regression: hair/hat shells used to export unused head vertices with zero normals,
+        # which the Khronos glTF validator rejects.
+        rig = default_rig(hair="Long", hat="Beanie", facial="Beard")
+        path = os.path.join(self.tmp.name, "a.glb")
+        export_glb(rig, path)
+        doc, blob = self.parse_glb(path)
+        for mesh in doc["meshes"]:
+            for prim in mesh["primitives"]:
+                acc = doc["accessors"][prim["attributes"]["NORMAL"]]
+                view = doc["bufferViews"][acc["bufferView"]]
+                normals = np.frombuffer(blob, np.float32, acc["count"] * 3, view["byteOffset"]).reshape(-1, 3)
+                np.testing.assert_allclose(np.linalg.norm(normals, axis=1), 1.0, atol=1e-3)
+                idx = doc["accessors"][prim["indices"]]
+                iview = doc["bufferViews"][idx["bufferView"]]
+                indices = np.frombuffer(blob, np.uint32, idx["count"], iview["byteOffset"])
+                self.assertEqual(len(np.unique(indices)), acc["count"])
+
     def test_glb_loads_in_trimesh_if_available(self):
         try:
             import trimesh
@@ -238,6 +256,24 @@ class ExportTests(unittest.TestCase):
 
 
 class PhotoTests(unittest.TestCase):
+    def test_real_portrait_is_stable_across_exposure(self):
+        try:
+            import cv2
+            from skimage import data
+        except ImportError:
+            self.skipTest("opencv / scikit-image not installed")
+        if not hasattr(cv2, "CascadeClassifier"):
+            self.skipTest("OpenCV without CascadeClassifier")
+        from avatarkit import photo
+        img = data.astronaut()
+        skins = set()
+        for gain in (0.6, 1.0, 1.3):
+            result, notes = photo.analyze(np.clip(img * gain, 0, 255).astype(np.uint8))
+            skins.add(result["skin"])
+            self.assertEqual(result["facial"], "None")
+            self.assertEqual(result["hair"], "Short")
+        self.assertEqual(skins, {"Porcelain"})
+
     def synthetic(self, skin, hair, bg, beard=None):
         img = np.zeros((300, 300, 3), np.uint8)
         img[:] = (np.array(bg) * 255).astype(np.uint8)

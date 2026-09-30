@@ -1,4 +1,6 @@
-# optional: better face detection for the photo import
-opencv-python-headless
+# optional: face detection for the photo import (OpenCV 5 dropped the classifier)
+opencv-python-headless<5
 # optional: lets the test suite load exported GLB files
 trimesh
+# optional: real-portrait test for the photo import
+scikit-image

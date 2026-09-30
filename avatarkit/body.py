@@ -123,9 +123,15 @@ def build_body(v):
     root, trunk = rig["root"], rig["torso"]
 
     # --- torso and what goes over it -------------------------------------
-    trunk.add(torso.section(-1.02, -4.28, 40, 0.0, skin, **sk))
+    # Skin torso is split at the waist: the lower half stays with the pelvis, under the
+    # trousers, so twisting the upper body never exposes skin at the hips.
+    trunk.add(torso.section(-1.02, -3.35, 30, 0.0, skin, **sk))
+    root.add(torso.section(-2.65, -4.28, 16, 0.0, skin, **sk))  # overlaps the upper half
     shirt = torso.section(-1.02, hem, 30, bulk, tcol, cap_ends=False, **CLOTH)
     trunk.add(garment(shirt, chest=True))
+    # A slightly smaller copy of the shirt's lower half stays with the pelvis, so leaning or
+    # twisting never opens a gap between the shirt and the trousers.
+    root.add(garment(torso.section(-2.65, hem, 14, bulk - 0.004, tcol, cap_ends=False, **CLOTH), chest=True))
     if top == "hoodie":
         phi = np.radians(np.linspace(-115, 115, 24))
         hood = np.stack([0.40 * np.sin(phi), -1.05 + 0.04 * np.cos(phi), 0.02 - 0.32 * np.cos(phi)], -1)
