@@ -633,6 +633,23 @@ def torso_section(y0, y1, build, grow, n, color, **kw):
     return loft(ys, a, b, color, **kw)
 
 
+def hand_meshes(wrist, side, skin):
+    """Palm, four fingers and a thumb, hanging down with the palm facing the body."""
+    wx, wy, wz = wrist
+    k = 1.25  # hand scale, so the hands match the forearm width
+    out = [ellipsoid((wx, wy - 0.10 * k, wz), (0.045 * k, 0.095 * k, 0.075 * k), skin, detail=16)]
+    for dz, length in zip((-0.05, -0.017, 0.017, 0.05), (0.12, 0.14, 0.13, 0.10)):
+        t = np.linspace(0, 1, 5)
+        path = np.stack([wx - side * 0.03 * k * t ** 2, wy - 0.17 * k - length * k * t,
+                         np.full(5, wz + dz * k)], -1)
+        out.append(tube(path, np.linspace(0.02, 0.013, 5) * k, skin, sides=8, thin=True))
+    thumb = np.array([(wx - side * 0.01, wy - 0.06 * k, wz + 0.06 * k),
+                      (wx - side * 0.02 * k, wy - 0.11 * k, wz + 0.10 * k),
+                      (wx - side * 0.03 * k, wy - 0.17 * k, wz + 0.115 * k)])
+    out.append(tube(catmull(thumb, 6), np.linspace(0.024, 0.015, 6) * k, skin, sides=8, thin=True))
+    return out
+
+
 def body_meshes(v):
     skin, top, pants = np.array(v["skin"]), v["top"], v["pants"]
     tcol, pcol, scol = v["topcolor"], v["pantscolor"], v["shoes"]
@@ -678,7 +695,7 @@ def body_meshes(v):
         arm = catmull(arm_keys, 30)
         out.append(tube(arm[:, :3], arm[:, 3], skin))
         wrist = arm[-1, :3]
-        out.append(ellipsoid(wrist + (0, -0.12, 0.02), (0.085 * rb, 0.15, 0.055), skin))
+        out += hand_meshes(wrist, s, skin)
         if top == "tank":
             out.append(ellipsoid(arm_keys[0, :3], (0.19 * rb,) * 3, skin))
         else:
