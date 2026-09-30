@@ -36,7 +36,9 @@ vec4 displaced(vec4 v) {
 VERTEX = """
 #version 120
 uniform mat4 uLightVP;
+uniform mat4 uAoVP;
 uniform mat4 uInvView;
+varying vec4 vAO;
 """ + DISPLACE + """
 centroid varying vec3 vN;
 centroid varying vec3 vP;
@@ -48,6 +50,7 @@ void main() {
     vec4 pos = displaced(gl_Vertex);
     vec4 ep = gl_ModelViewMatrix * pos;
     vLight = uLightVP * (uInvView * ep);       // this point as seen from the key light
+    vAO = uAoVP * (uInvView * ep);             // ... and from straight above (sky light)
     vP = ep.xyz;
     vN = gl_NormalMatrix * gl_Normal;
     vT = gl_NormalMatrix * gl_MultiTexCoord0.xyz;   // strand direction (0,1,0 for other meshes)
@@ -66,14 +69,16 @@ float shadowAmount(float ndl, float biasScale) {
     vec3 p = vLight.xyz / vLight.w * 0.5 + 0.5;
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
     float bias = (0.0007 + 0.0032 * (1.0 - clamp(ndl, 0.0, 1.0))) * biasScale;
-    float lit = 0.0;
-    for (int i = -1; i <= 1; i++) {
-        for (int j = -1; j <= 1; j++) {
-            float d = texture2D(uShadow, p.xy + vec2(float(i), float(j)) * uShadowTexel).r;
-            lit += (p.z - bias > d) ? 0.0 : 1.0;
+    float lit = 0.0, wsum = 0.0;
+    for (int i = -2; i <= 2; i++) {
+        for (int j = -2; j <= 2; j++) {
+            float w = 1.0 - 0.16 * float(i * i + j * j);          // soft, round kernel: no banding
+            float d = texture2D(uShadow, p.xy + vec2(float(i), float(j)) * uShadowTexel * 1.25).r;
+            lit += w * ((p.z - bias > d) ? 0.0 : 1.0);
+            wsum += w;
         }
     }
-    return lit / 9.0;
+    return lit / wsum;
 }
 """
 
@@ -92,7 +97,29 @@ uniform float uPattern;
 uniform float uFreckle;
 uniform vec3 uCenter;
 uniform float uStrand;
+uniform mat4 uInvView;
+uniform sampler2D uAoMap;
+uniform float uAoOn;
+uniform float uAoTexel;
+varying vec4 vAO;
 """ + SHADOW_LOOKUP + """
+// Ambient occlusion: how much of the sky is open above this point (a wide, soft shadow from overhead).
+float skyOpen(vec3 nEye, float biasScale) {
+    vec3 p = vAO.xyz / vAO.w * 0.5 + 0.5;
+    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+    vec3 nw = mat3(uInvView) * nEye;
+    float bias = (0.0025 + 0.010 * (1.0 - clamp(nw.y, 0.0, 1.0))) * biasScale;
+    float lit = 0.0, wsum = 0.0;
+    for (int i = -3; i <= 3; i++) {
+        for (int j = -3; j <= 3; j++) {
+            float w = max(1.0 - 0.055 * float(i * i + j * j), 0.0);
+            float d = texture2D(uAoMap, p.xy + vec2(float(i), float(j)) * uAoTexel * 3.5).r;
+            lit += w * ((p.z - bias > d) ? 0.0 : 1.0);
+            wsum += w;
+        }
+    }
+    return lit / wsum;
+}
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -148,15 +175,13 @@ void main() {
         base = mix(base, base * vec3(0.62, 0.45, 0.35), dots * mask * 0.9);
     }
     if (isCloth) {
-        base *= 0.96 + 0.06 * hash(floor(vObj.xy * 180.0));
         if (kind > 3.5) {
-            base *= 0.95 + 0.10 * vnoise(vec2((vObj.x + vObj.z) * 70.0, vObj.y * 30.0));
+            base *= 0.97 + 0.06 * vnoise(vec2((vObj.x + vObj.z) * 40.0, vObj.y * 20.0));
         }
         // soft fabric folds: bend the normal along slowly wandering horizontal creases
-        float fold = sin(vObj.y * 34.0 + 2.6 * sin(vObj.x * 9.0 + vObj.z * 7.0))
-                   + 0.5 * sin(vObj.y * 71.0 + 5.0 * vnoise(vObj.xz * 6.0));
-        N = normalize(N + normalize(vT) * fold * 0.028);
-        base *= 1.0 - 0.035 * max(-fold, 0.0);
+        float fold = sin(vObj.y * 22.0 + 2.2 * sin(vObj.x * 7.0 + vObj.z * 6.0));
+        N = normalize(N + normalize(vT) * fold * 0.018);
+        base *= 1.0 - 0.025 * max(-fold, 0.0);
         if (uPattern > 0.5) {
             float th = atan(vObj.x, vObj.z);
             float pat = 0.0;
@@ -187,8 +212,8 @@ void main() {
     float ndl = dot(N, L0);
     // cast shadows from the key light; thin strands need a bigger bias or they shadow themselves
     float sh = uShadowOn > 0.5 ? shadowAmount(ndl, uStrand > 0.5 ? 4.0 : 1.0) : 1.0;
-    float lit = smoothstep(-0.15, 0.35, ndl) * sh;
-    float hi = smoothstep(0.25, 0.95, ndl) * sh;
+    float lit = (isSkin ? smoothstep(-0.50, 0.65, ndl) : smoothstep(-0.15, 0.35, ndl)) * sh;
+    float hi = (isSkin ? smoothstep(0.10, 1.00, ndl) * 0.7 : smoothstep(0.25, 0.95, ndl)) * sh;
     vec3 shadowTint = isSkin ? vec3(0.80, 0.58, 0.60) : vec3(0.62, 0.60, 0.78);
     vec3 c = base * mix(shadowTint * 0.72, vec3(0.92), lit);
     c = mix(c, base * vec3(1.0, 0.97, 0.92) * 1.05, hi);
@@ -196,6 +221,10 @@ void main() {
     c += base * mix(vec3(0.05, 0.04, 0.07), vec3(0.10, 0.11, 0.14), N.y * 0.5 + 0.5);
     if (isSkin) {
         c += base * vec3(0.30, 0.06, 0.02) * smoothstep(0.35, 0.0, abs(ndl - 0.08)) * 0.5 * mix(0.4, 1.0, sh);
+    }
+    if (uAoOn > 0.5) {
+        float open = skyOpen(N, uStrand > 0.5 ? 3.0 : 1.0);
+        c *= mix(uStrand > 0.5 ? 0.88 : 0.76, 1.0, open);
     }
     float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
     c += vec3(0.30, 0.36, 0.55) * rim * smoothstep(-0.3, 0.5, dot(N, L2)) * 0.5;
@@ -394,7 +423,8 @@ class Renderer:
         disp = ("uStrandScale", "uSwing", "uSwingScale", "uJaw")
         loc = lambda p, names: {n: glGetUniformLocation(p, n) for n in names}
         self.u = loc(self.prog, ("uKind", "uSpec", "uShine", "uColor2", "uPattern", "uFreckle", "uCenter",
-                                 "uStrand", "uLightVP", "uInvView", "uShadow", "uShadowOn", "uShadowTexel") + disp)
+                                 "uStrand", "uLightVP", "uInvView", "uShadow", "uShadowOn", "uShadowTexel",
+                                 "uAoVP", "uAoMap", "uAoOn", "uAoTexel") + disp)
         self.ou = loc(self.oprog, ("uPx", "uViewH", "uOutline") + disp)
         self.du = loc(self.dprog, disp)
         self.gu = loc(self.gprog, ("uLightVP", "uInvView", "uShadow", "uShadowOn", "uShadowTexel"))
@@ -405,6 +435,11 @@ class Renderer:
         self.inv_view = np.eye(4)
         self.view_h = 720.0
         self.shadow = ShadowMap()
+        self.ao = ShadowMap(1024)
+        self.ao_vp = np.eye(4)
+        self.target_fbo = 0            # where the scene is drawn (an off-screen buffer for hi-res captures)
+        self.px_scale = 1.0            # outline width multiplier when supersampling
+        self.offscreen = None
         glEnable(GL_MULTISAMPLE)
         glEnable(GL_DEPTH_TEST)
         glDisable(GL_LIGHTING)
@@ -457,6 +492,8 @@ class Renderer:
         if use_shadow:
             glActiveTexture(GL_TEXTURE1)
             glBindTexture(GL_TEXTURE_2D, self.shadow.tex)
+            glActiveTexture(GL_TEXTURE2)
+            glBindTexture(GL_TEXTURE_2D, self.ao.tex if self.ao.ok else 0)
             glActiveTexture(GL_TEXTURE0)
         self._ground(rig.ground_y, use_shadow)
         self._outline_pass(rig, pose)
@@ -473,11 +510,28 @@ class Renderer:
         eye = center + direction * radius * 2
         return look_at(eye, center, up), ortho(radius, radius * 0.4, radius * 3.6)
 
+    def _sky_matrices(self, rig):
+        """Orthographic camera looking down from above (slightly forward): the sky-light occluders."""
+        d = np.array([0.18, 1.0, 0.35])
+        d /= np.linalg.norm(d)
+        top = 0.9
+        center = np.array([0.0, (top + rig.ground_y) / 2, 0.0])
+        radius = (top - rig.ground_y) / 2 + 1.6
+        eye = center + d * radius * 2
+        return look_at(eye, center, np.array([0.0, 0.0, -1.0])), ortho(radius, radius * 0.4, radius * 3.6)
+
     def _shadow_pass(self, rig, pose, view, cam):
         light_view, light_proj = self._light_matrices(view, rig)
         self.light_vp = light_proj @ light_view
-        glBindFramebuffer(GL_FRAMEBUFFER, self.shadow.fbo)
-        glViewport(0, 0, self.shadow.size, self.shadow.size)
+        self._depth_pass(self.shadow, rig, pose, light_view, light_proj)
+        if self.ao.ok:
+            sky_view, sky_proj = self._sky_matrices(rig)
+            self.ao_vp = sky_proj @ sky_view
+            self._depth_pass(self.ao, rig, pose, sky_view, sky_proj)
+
+    def _depth_pass(self, smap, rig, pose, light_view, light_proj):
+        glBindFramebuffer(GL_FRAMEBUFFER, smap.fbo)
+        glViewport(0, 0, smap.size, smap.size)
         glClear(GL_DEPTH_BUFFER_BIT)
         glMatrixMode(GL_PROJECTION)
         glLoadMatrixf(light_proj.T.astype(np.float32))
@@ -487,7 +541,7 @@ class Renderer:
         self._set_displacement(self.du)
         self._walk(rig.root, pose, self._draw_depth)
         glUseProgram(0)
-        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        glBindFramebuffer(GL_FRAMEBUFFER, self.target_fbo)
 
     def _set_displacement(self, u, jaw=None):
         glUniform1f(u["uStrandScale"], self.strand_scale)
@@ -562,6 +616,10 @@ class Renderer:
         glUniform1i(u["uShadow"], 1)
         glUniform1f(u["uShadowOn"], 1.0 if use_shadow else 0.0)
         glUniform1f(u["uShadowTexel"], 1.0 / self.shadow.size)
+        glUniformMatrix4fv(u["uAoVP"], 1, GL_TRUE, self.ao_vp.astype(np.float32))
+        glUniform1i(u["uAoMap"], 2)
+        glUniform1f(u["uAoOn"], 1.0 if (use_shadow and self.ao.ok) else 0.0)
+        glUniform1f(u["uAoTexel"], 1.0 / self.ao.size)
         self._set_displacement(u)
         self._walk(rig.root, pose, self._draw_mesh)
         glUseProgram(0)
@@ -641,7 +699,7 @@ class Renderer:
     def _draw_outline(self, m):
         if not m.outline:
             return
-        glUniform1f(self.ou["uPx"], 1.0 if m.thin else 2.2)
+        glUniform1f(self.ou["uPx"], (1.0 if m.thin else 2.2) * self.px_scale)
         glUniform3f(self.ou["uOutline"], *(c * 0.30 for c in m.color))
         self._mesh_displacement(self.ou, m)
         self._arrays(m)
@@ -678,6 +736,63 @@ class Renderer:
         self._release(m)
 
     # ---- capture ---------------------------------------------------------------------
+    def _offscreen(self, w, h):
+        if self.offscreen and self.offscreen[0] == (w, h):
+            return self.offscreen[1]
+        self.release_offscreen()
+        fbo = glGenFramebuffers(1)
+        color, depth = glGenRenderbuffers(1), glGenRenderbuffers(1)
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+        glBindRenderbuffer(GL_RENDERBUFFER, color)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, w, h)
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, color)
+        glBindRenderbuffer(GL_RENDERBUFFER, depth)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h)
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth)
+        ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        self.offscreen = ((w, h), fbo if ok else None, color, depth)
+        return fbo if ok else None
+
+    def release_offscreen(self):
+        if self.offscreen:
+            _, fbo, color, depth = self.offscreen
+            if fbo:
+                glDeleteFramebuffers(1, [fbo])
+            glDeleteRenderbuffers(2, [color, depth])
+            self.offscreen = None
+
+    def capture(self, rig, pose, cam, bg, size, view, scale=2, supersample=3, alpha=False, **kw):
+        """Draw the scene `supersample` times larger off-screen and shrink it to `scale` x the view size:
+        much smoother edges and hair than the live window. Returns a pygame surface.
+        Falls back to the plain on-screen picture if the graphics card can't do it."""
+        w, h = size
+        vw, vh = view
+        limit = int(glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE) or 4096)
+        ss = supersample
+        while ss > 1 and max(w, h) * ss > limit:
+            ss -= 1
+        target_w, target_h = int(vw * scale), int(vh * scale)
+        big = max(ss, scale)
+        while big > 1 and max(w, h) * big > limit:
+            big -= 1
+        fbo = self._offscreen(w * big, h * big) if big > 1 or scale > 1 else None
+        if not fbo:
+            self.release_offscreen()
+            return self.grab(view, alpha=alpha)
+        keep = kw.pop("reserved", 0)
+        self.target_fbo, self.px_scale = fbo, float(big)
+        try:
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+            self.draw_scene(rig, pose, cam, bg, (w * big, h * big), transparent=alpha, reserved=keep * big, **kw)
+            surf = self.grab((vw * big, vh * big), alpha=alpha)
+        finally:
+            self.target_fbo, self.px_scale = 0, 1.0
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        if surf.get_size() != (target_w, target_h):
+            surf = pygame.transform.smoothscale(surf, (target_w, target_h))
+        return surf
+
     @staticmethod
     def grab(size, alpha=False):
         w, h = size

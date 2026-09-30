@@ -155,7 +155,13 @@ def strand_mesh(paths, base_color, radius, rng, locks, flyaway=0.02, part="hair"
         paths[fly] += rng.normal(size=(fly.sum(), 1, 3)) * 0.035 * t[None, :, None] ** 1.5
     r0 = radius * (0.85 + 0.35 * rng.random(n))
     r0[fly] *= 0.55
-    radii = r0[:, None] * (1 - 0.72 * t ** 1.4)[None, :]
+    # thick through most of the length, then a fine point (blunt cut ends looked coarse)
+    taper = (1 - 0.30 * t) * (1 - 0.92 * smoothstep(0.55, 1.0, t) ** 1.3)
+    radii = r0[:, None] * np.maximum(taper, 0.06)[None, :]
+    # every lock lets its tips drift a little its own way, so the fall isn't a perfect curtain
+    if part == "hair":
+        lock_kick = rng.normal(size=(len(locks[0]), 3)) * np.array([1.0, 0.25, 1.0])
+        paths += lock_kick[locks[1]][:, None, :] * (0.030 * t ** 3)[None, :, None]
 
     tan = unit(np.gradient(paths, axis=1) + 1e-9)
     ref = np.where((np.abs(tan[..., 1]) < 0.9)[..., None], UP, np.array([1.0, 0.0, 0.0]))

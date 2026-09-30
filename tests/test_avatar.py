@@ -481,5 +481,18 @@ class PhotoTests(unittest.TestCase):
         self.assertEqual(result["facial"], "None")
 
 
+class LimbShapeTests(unittest.TestCase):
+    def test_muscle_shaping_keeps_joints_round_and_bulges_between(self):
+        from avatarkit import body
+        keys = body.arm_keys(1, 1.0, 1.0, 1.0)
+        plain = body.catmull(keys, 41, 0.0, 4.0)
+        shaped = body.arm_curve(keys, 41, 0.0, 4.0)
+        for k in (0, 20, 40):                                   # shoulder, elbow, wrist
+            self.assertAlmostEqual(shaped[k, 3], plain[k, 3], places=6)
+        self.assertGreater(shaped[10, 3], plain[10, 3] * 1.05)   # biceps
+        self.assertGreater(shaped[27, 3], plain[27, 3] * 1.05)   # forearm
+        np.testing.assert_allclose(shaped[:, :3], plain[:, :3])
+
+
 if __name__ == "__main__":
     unittest.main()

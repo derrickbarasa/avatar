@@ -141,12 +141,15 @@ packs are reported at startup and never stop the good ones loading.
 - Nine emotes (wave, laugh, shrug...), emotion picked from the text being spoken.
 - Lip-sync rules for English, Spanish, Italian and Portuguese (other languages use the
   English rules with accents removed).
-- Soft shadows, cloth folds, and hair that swings when the head moves (Scene tab).
+- Soft shadows with ambient occlusion (under the chin, hair and arms), cloth folds, and hair
+  that swings when the head moves (Shadows / Hair physics in the Scene tab).
+- PNG exports and `--bare` screenshots are drawn 3x larger off-screen and shrunk for smooth
+  edges; PNG exports are twice the window's pixel size.
 
 ## Not done yet
 
 Neural/offline TTS, microphone input, BVH import, VRM expressions, landmark-based photo
-matching, a virtual webcam, ambient occlusion, and testing on macOS/Linux (only Windows
+matching, a virtual webcam, screen-space ambient occlusion (the current one is a soft overhead shadow), and testing on macOS/Linux (only Windows
 has been tried).
 
 ## Photo import

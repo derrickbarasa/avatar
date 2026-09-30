@@ -85,10 +85,16 @@ def clipboard_put(text):
 
 def open_window(size):
     pygame.init()
-    for attr, val in ((pygame.GL_MULTISAMPLEBUFFERS, 1), (pygame.GL_MULTISAMPLESAMPLES, 4),
-                      (pygame.GL_ALPHA_SIZE, 8), (pygame.GL_DEPTH_SIZE, 24)):  # 16-bit depth z-fights clothes
-        pygame.display.gl_set_attribute(attr, val)
-    pygame.display.set_mode(size, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE)
+    for samples in (8, 4, 0):                     # smoothest edges the graphics card allows
+        for attr, val in ((pygame.GL_MULTISAMPLEBUFFERS, 1 if samples else 0), (pygame.GL_MULTISAMPLESAMPLES, samples),
+                          (pygame.GL_ALPHA_SIZE, 8), (pygame.GL_DEPTH_SIZE, 24)):  # 16-bit depth z-fights clothes
+            pygame.display.gl_set_attribute(attr, val)
+        try:
+            pygame.display.set_mode(size, pygame.OPENGL | pygame.DOUBLEBUF | pygame.RESIZABLE)
+            break
+        except pygame.error:
+            if not samples:
+                raise
     pygame.display.set_caption("Avatar Studio")
     try:
         from pygame._sdl2.video import Window
@@ -348,15 +354,17 @@ class App:
         while self.pending:
             kind, *rest = self.pending.pop(0)
             grab = lambda alpha=False: self.renderer.grab(view, alpha=alpha)
+            # pictures are drawn 3x larger off-screen and shrunk: clean edges, and 2x the window's pixels
+            shot = lambda alpha=False: self.renderer.capture(
+                self.rig, pose, self.cam, bg, size, view, scale=2, supersample=3, alpha=alpha, blink=blink,
+                gaze=gaze, lid=lid, reserved=RESERVED, **self.look())
             if kind == "png":
                 path = self.out_path(".png")
-                pygame.image.save(grab(), path)
+                pygame.image.save(shot(), path)
                 self.done_export(path, "picture")
             elif kind in ("transparent", "bundle"):
-                solid = grab()
-                self.renderer.draw_scene(self.rig, pose, self.cam, bg, size, blink, transparent=True,
-                                         reserved=RESERVED, gaze=gaze, lid=lid, **self.look())
-                clear = grab(True)
+                solid = shot()
+                clear = shot(True)
                 if kind == "transparent":
                     path = self.out_path("_transparent.png")
                     pygame.image.save(clear, path)
@@ -894,12 +902,11 @@ class App:
             if args.transparent or args.bare:
                 t = self.clock_time()
                 pose, blink, gaze, lid = self.live_state(t)
-                self.renderer.draw_scene(self.rig, pose, self.cam, O.resolve(self.state)["bg"], (w, h), blink,
-                                         transparent=args.transparent, reserved=RESERVED, gaze=gaze, lid=lid,
-                                         **self.look())
-                surf = self.renderer.grab(view, alpha=args.transparent)
+                surf = self.renderer.capture(
+                    self.rig, pose, self.cam, O.resolve(self.state)["bg"], (w, h), view, scale=1, supersample=3,
+                    alpha=args.transparent, blink=blink, gaze=gaze, lid=lid, reserved=RESERVED, **self.look())
             else:
-                surf = self.renderer.grab((w, h))
+                surf = self.renderer.grab((w, h))              # the window as you see it, card included
             pygame.image.save(surf, args.shot)
             print("saved", args.shot)
         if self.last_export and args.export:

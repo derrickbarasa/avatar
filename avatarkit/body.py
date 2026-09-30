@@ -92,6 +92,31 @@ def hand_meshes(wrist, side, skin):
     return [palm] + [m for _, p, d, _, _ in fingers for m in (p, d)]
 
 
+def _bump(t, c, w):
+    """Smooth hump centred on c that is exactly zero further than w away."""
+    return np.clip(1.0 - ((t - c) / w) ** 2, 0.0, 1.0) ** 2
+
+
+def limb_curve(keys, m, t0, t1, humps):
+    """Catmull curve through the limb keys with muscle shape added to the radius (joints stay round)."""
+    out = catmull(keys, m, t0, t1)
+    t = np.linspace(t0, t1, m)
+    out[:, 3] *= 1.0 + sum(a * _bump(t, c, w) for a, c, w in humps)
+    return out
+
+
+ARM_HUMPS = ((0.15, 1.0, 0.95), (0.17, 2.75, 0.7))     # biceps / deltoid, forearm belly
+LEG_HUMPS = ((0.10, 0.95, 0.9), (0.24, 2.85, 0.8))     # thigh, calf
+
+
+def arm_curve(keys, m, t0, t1):
+    return limb_curve(keys, m, t0, t1, ARM_HUMPS)
+
+
+def leg_curve(keys, m, t0, t1):
+    return limb_curve(keys, m, t0, t1, LEG_HUMPS)
+
+
 def arm_keys(s, build, radius, height):
     keys = np.array([(0.98, -1.36, 0.00, 0.190),   # shoulder
                      (1.05, -2.05, 0.02, 0.170),   # biceps
@@ -235,7 +260,7 @@ def build_body(v):
         thigh, shin, foot = (rig.add_node("thigh" + name, legk[0, :3], "root"),
                              rig.add_node("shin" + name, legk[2, :3], "thigh" + name),
                              rig.add_node("foot" + name, legk[4, :3], "shin" + name))
-        up, lo = catmull(ak, 16, 0.0, 2.0), catmull(ak, 18, 2.0, 4.0)
+        up, lo = arm_curve(ak, 16, 0.0, 2.0), arm_curve(ak, 18, 2.0, 4.0)
         arm.add(tube(up[:, :3], up[:, 3], skin, **sk), ellipsoid(ak[0, :3], (ak[0, 3],) * 3, skin, **sk).set(joint=True))
         fore.add(tube(lo[:, :3], lo[:, 3], skin, **sk), ellipsoid(ak[2, :3], (ak[2, 3],) * 3, skin, **sk).set(joint=True))
         palm, fingers = hand_parts(ak[4, :3], s, skin)
@@ -248,12 +273,12 @@ def build_body(v):
         grow = bulk - 0.005
         if top != "tank":
             if top == "tee":
-                sl = catmull(ak, 14, 0.0, 1.7)
+                sl = arm_curve(ak, 14, 0.0, 1.7)
                 arm.add(garment(tube(sl[:, :3], sl[:, 3] + grow, tcol, cap_ends=False, **CLOTH)))
             else:
-                sl = catmull(ak, 16, 0.0, 2.0)
+                sl = arm_curve(ak, 16, 0.0, 2.0)
                 arm.add(garment(tube(sl[:, :3], sl[:, 3] + grow, tcol, cap_ends=False, **CLOTH)))
-                sl2 = catmull(ak, 18, 2.0, 3.95)
+                sl2 = arm_curve(ak, 18, 2.0, 3.95)
                 fore.add(garment(tube(sl2[:, :3], sl2[:, 3] + grow, tcol, cap_ends=False, **CLOTH)),
                          ellipsoid(ak[2, :3], (ak[2, 3] + grow,) * 3, tcol, **CLOTH).set(joint=True))
             arm.add(garment(ellipsoid(ak[0, :3], (ak[0, 3] + grow,) * 3, tcol, **CLOTH).set(joint=True)))
@@ -268,19 +293,19 @@ def build_body(v):
                                (0.05, 0.06, 0.09), detail=16, shine=90, spec=0.7, kind="glossy"))
 
         # --- legs, trousers, shoes -------------------------------------------------
-        up, lo = catmull(legk, 18, 0.0, 2.0), catmull(legk, 20, 2.0, 4.0)
+        up, lo = leg_curve(legk, 18, 0.0, 2.0), leg_curve(legk, 20, 2.0, 4.0)
         thigh.add(tube(up[:, :3], up[:, 3], skin, **sk), ellipsoid(legk[0, :3], (legk[0, 3],) * 3, skin, **sk).set(joint=True))
         shin.add(tube(lo[:, :3], lo[:, 3], skin, **sk), ellipsoid(legk[2, :3], (legk[2, 3],) * 3, skin, **sk).set(joint=True))
         trouser = dict(shine=12, spec=0.04, kind=pkind)
         if pants == "jeans":
-            tu = catmull(legk, 18, 0.0, 2.0)
+            tu = leg_curve(legk, 18, 0.0, 2.0)
             thigh.add(tube(tu[:, :3], tu[:, 3] + 0.035, pcol, cap_ends=False, **trouser),
                       ellipsoid(legk[0, :3], (legk[0, 3] + 0.035,) * 3, pcol, **trouser).set(joint=True))
-            tl = catmull(legk, 20, 2.0, 2.9 if shoestyle == "boots" else 3.95)  # tucked into boots
+            tl = leg_curve(legk, 20, 2.0, 2.9 if shoestyle == "boots" else 3.95)  # tucked into boots
             shin.add(tube(tl[:, :3], tl[:, 3] + 0.035, pcol, cap_ends=False, **trouser),
                      ellipsoid(legk[2, :3], (legk[2, 3] + 0.035,) * 3, pcol, **trouser).set(joint=True))
         elif pants == "shorts":
-            tu = catmull(legk, 14, 0.0, 1.7)
+            tu = leg_curve(legk, 14, 0.0, 1.7)
             thigh.add(tube(tu[:, :3], tu[:, 3] + 0.035, pcol, cap_ends=False, **trouser),
                       ellipsoid(legk[0, :3], (legk[0, 3] + 0.035,) * 3, pcol, **trouser).set(joint=True))
         ax, ay = legk[4, 0], legk[4, 1]
@@ -295,7 +320,7 @@ def build_body(v):
             foot.add(ellipsoid((ax, ay - 0.345, 0.16), (0.155 * radius + 0.025, 0.035, 0.335), sole,
                                shine=20, spec=0.1))
             if leather:
-                shaft = catmull(legk, 12, 2.8, 3.95)
+                shaft = leg_curve(legk, 12, 2.8, 3.95)
                 shin.add(tube(shaft[:, :3], shaft[:, 3] + 0.055, scol, cap_ends=True,
                               shine=30, spec=0.15, kind="glossy"))
     rig.ground_y = float(legk[4, 1] - 0.38 + LIFT)
