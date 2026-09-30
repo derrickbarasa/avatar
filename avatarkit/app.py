@@ -9,12 +9,14 @@ import time
 import pygame
 
 from . import options as O
+from . import speech as speech_mod
+from . import tts
 from .builder import build_avatar
 from .exporters import export_glb, export_obj
 from .photo import apply_photo
-from .poses import blink_angle, pose_at
+from .poses import blink_angle, gaze_at, pose_at, talk_overlay
 from .render import Camera, Renderer
-from .ui import RESERVED, UI, UIModel
+from .ui import PHRASES, RESERVED, UI, UIModel
 
 EXPORT_DIR = "exports"
 VIEW_ORDER = ["bust", "face", "full"]
@@ -101,6 +103,10 @@ class App:
         self.args = args
         self.renderer, self.ui = Renderer(), UI()
         self.help, self.ui_key = False, None
+        self.speech, self.speech_t0, self.job, self.sound = None, 0.0, None, None
+        self.spin_before = False
+        self.say_text, self.say_focus = PHRASES[0][1], False
+        self.voices_job = None if args.shot else tts.VoiceList()
         self.state = dict(O.DEFAULT_STATE)
         self.setup_state(args)
         self.cam = Camera(args.view)
@@ -113,6 +119,12 @@ class App:
         self.want = None   # pending capture: "png" or "transparent"
         self.rig = None
         self.rebuild()
+        if args.say:
+            self.say_text = args.say[:240]
+            if args.shot:
+                self.speak_now_blocking()
+            else:
+                self.speak()
 
     # ---- state ---------------------------------------------------------------------
     def setup_state(self, args):
@@ -154,16 +166,135 @@ class App:
 
     # ---- actions ---------------------------------------------------------------------
     def current_pose(self, t):
-        animate = O.resolve(self.state)["animate"]
-        name = O.resolve(self.state)["pose"]
-        return pose_at(name, t, animate), (blink_angle(t) if animate else 0.0)
+        """(pose, blink, gaze) for time t, with speech body language and lips applied."""
+        r = O.resolve(self.state)
+        animate = r["animate"]
+        pose = pose_at(r["pose"], t, animate)
+        mouth = self.mouth_now()
+        if mouth is not None:
+            talk_overlay(pose, mouth, t, r["gestures"])
+            self.rig.set_mouth(mouth.open, mouth.wide, mouth.press)
+        else:
+            self.rig.set_mouth(0.0)
+        blink = blink_angle(t) if animate else 0.0
+        gaze = gaze_at(t, mouth is not None) if animate else (0.0, 0.0)
+        return pose, blink, gaze
+
+    # ---- speech --------------------------------------------------------------------------
+    @property
+    def speaking(self):
+        return self.speech is not None
+
+    def mouth_now(self):
+        """Current MouthShape while speaking (or the --viseme override), else None."""
+        if self.args.viseme:
+            o, w, p = speech_mod.VISEMES[self.args.viseme]
+            return speech_mod.MouthShape(open=o, wide=w, press=p)
+        if self.speech is None:
+            return None
+        tt = self.clock_time() - self.speech_t0
+        if tt > self.speech.duration + 0.3:
+            self.stop_speech()
+            return None
+        return self.speech.sample(tt)
+
+    def speak(self):
+        """Speak the text box (a second press stops it). Voice synthesis runs in the background."""
+        if self.speech is not None:
+            self.stop_speech()
+            return
+        if self.job is not None and not self.job.done:
+            return
+        text = self.say_text.strip()
+        if not text:
+            self.notify("Type something for the avatar to say")
+            return
+        r = O.resolve(self.state)
+        self.job = tts.Job(text, r["voice"], r["speed"])
+        self.notify("Preparing voice...")
+        self.dirty = True
+
+    def speak_now_blocking(self):
+        """For --shot: synthesize on this thread so a frame at --time shows the right lips."""
+        text = self.say_text.strip()
+        r = O.resolve(self.state)
+        try:
+            self.begin_speech(text, tts.synthesize(text, r["voice"], r["speed"]), None)
+        except tts.TTSError as exc:
+            self.begin_speech(text, None, str(exc))
+
+    def begin_speech(self, text, path, error):
+        """Analyse the audio for lip-sync and start playing it (falls back to lips-only)."""
+        sp, note = None, ""
+        if path:
+            try:
+                if not pygame.mixer.get_init():
+                    pygame.mixer.init()
+                sound = pygame.mixer.Sound(path)
+                arr = pygame.sndarray.array(sound).astype("float32") / 32768.0
+                mono = arr.mean(1) if arr.ndim == 2 else arr
+                sp = speech_mod.Speech.from_samples(text, mono, pygame.mixer.get_init()[0])
+                if self.args.shot is None:
+                    sound.play()
+                self.sound = sound
+            except (pygame.error, ValueError) as exc:
+                note = f"Audio unavailable ({exc}); showing lips only"
+        else:
+            note = f"No voice ({error}); showing lips only"
+        if sp is None:
+            sp = speech_mod.Speech.from_text_only(text)
+        if note:
+            self.notify(note)
+        else:
+            self.message = ""          # drop "Preparing voice..."
+        self.speech = sp
+        self.speech_t0 = 0.0 if self.args.shot is not None else self.clock_time()
+        self.spin_before, self.spin = self.spin, False      # face the viewer while talking
+        self.dirty = True
+
+    def stop_speech(self):
+        try:
+            pygame.mixer.stop()
+        except pygame.error:
+            pass
+        if self.speech is not None:
+            self.spin = self.spin_before
+        self.speech, self.sound, self.dirty = None, None, True
+        if self.rig:
+            self.rig.set_mouth(0.0)
+
+    def poll_background(self):
+        if self.job is not None and self.job.done:
+            job, self.job = self.job, None
+            self.begin_speech(job.text, job.path, job.error)
+        if self.voices_job is not None and self.voices_job.done:
+            if self.voices_job.voices:
+                O.set_choices("voice", self.voices_job.voices)
+            self.voices_job, self.dirty = None, True
+
+    def say_key(self, e):
+        """Keys typed while the text box has focus."""
+        k, ctrl = e.key, pygame.key.get_mods() & pygame.KMOD_CTRL
+        if k == pygame.K_ESCAPE:
+            self.say_focus = False
+        elif k in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self.say_focus = False
+            self.speak()
+        elif k == pygame.K_BACKSPACE:
+            self.say_text = self.say_text[:-1]
+        elif k == pygame.K_v and ctrl:
+            self.say_text = (self.say_text + clipboard_get().replace("\r", " ").replace("\n", " "))[:240]
+        elif e.unicode and e.unicode.isprintable() and len(self.say_text) < 240:
+            self.say_text += e.unicode
+        self.dirty = True
+        return True
 
     def save_png(self, transparent):
         self.want = "transparent" if transparent else "png"
 
     def export(self, kind):
         t = self.clock_time()
-        pose, _ = self.current_pose(t)
+        pose, _, _ = self.current_pose(t)
         path = stamp("." + kind)
         (export_glb if kind == "glb" else export_obj)(self.rig, path, pose)
         self.notify(f"Exported {os.path.basename(path)}")
@@ -206,11 +337,24 @@ class App:
         mods = pygame.key.get_mods()
         ctrl, shift = mods & pygame.KMOD_CTRL, mods & pygame.KMOD_SHIFT
         k = e.key
+        if self.say_focus:
+            return self.say_key(e)
         if k == pygame.K_ESCAPE:
             if self.help:
                 self.help, self.dirty = False, True
                 return True
+            if self.speech is not None or self.job is not None:
+                self.stop_speech()
+                self.job = None
+                return True
             return False
+        if k == pygame.K_t:
+            self.set_tab([n for n, _ in O.TABS].index("Talk"))
+            self.say_focus = True
+            return True
+        if k in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self.speak()
+            return True
         if k in (pygame.K_h, pygame.K_F1):
             self.help, self.dirty = not self.help, True
         elif k == pygame.K_TAB:
@@ -263,6 +407,8 @@ class App:
             self.help, self.dirty = False, True
             return
         hit = self.ui.hit(pos)
+        self.say_focus = hit == ("textbox",)
+        self.dirty = True
         if hit is None:
             if pos[0] < w - RESERVED:
                 self.dragging, self.spin, self.dirty = True, False, True
@@ -280,6 +426,18 @@ class App:
             self.spin, self.dirty = not self.spin, True
         elif kind == "copy":
             self.copy_code()
+        elif kind == "say":
+            if hit[1] == "speak":
+                self.speak()
+            else:
+                self.say_text = random.choice(PHRASES)[1]
+        elif kind == "phrase":
+            self.say_text = PHRASES[hit[1]][1]
+            if self.speech is not None:
+                self.stop_speech()
+            self.speak()
+        elif kind == "textbox":
+            self.say_focus = True
         elif hit[1] == "random":
             self.randomize()
         elif hit[1] == "photo":
@@ -318,17 +476,20 @@ class App:
         w, h = self.size()
         view = (w - RESERVED, h)
         t = self.clock_time()
-        pose, blink = self.current_pose(t)
+        self.poll_background()
+        pose, blink, gaze = self.current_pose(t)
         bg = O.resolve(self.state)["bg"]
         if self.spin:
             self.cam.yaw += 0.4
+        elif self.speech is not None and not self.dragging and self.args.shot is None:
+            self.cam.yaw += (round(self.cam.yaw / 360) * 360 - self.cam.yaw) * 0.08   # turn to face us
         self.cam.update(self.rig.ground_y)
-        self.renderer.draw_scene(self.rig, pose, self.cam, bg, (w, h), blink, reserved=RESERVED)
+        self.renderer.draw_scene(self.rig, pose, self.cam, bg, (w, h), blink, reserved=RESERVED, gaze=gaze)
         if self.want:
             transparent = self.want == "transparent"
             if transparent:
                 self.renderer.draw_scene(self.rig, pose, self.cam, bg, (w, h), blink, transparent=True,
-                                         reserved=RESERVED)
+                                         reserved=RESERVED, gaze=gaze)
             path = stamp(".png")
             pygame.image.save(self.renderer.grab(view, alpha=transparent), path)
             self.want = None
@@ -337,10 +498,14 @@ class App:
         if self.message and left <= 0:
             self.message = ""
         alpha = 0.0 if not self.message else min(1.0, left / 0.5)
+        busy = self.job is not None and not self.job.done
+        cursor = self.say_focus and int(time.time() * 2) % 2 == 0
         model = UIModel(self.state, self.tab, self.row, O.encode_state(self.state), self.cam.view,
-                        self.spin, self.message, alpha, self.help)
+                        self.spin, self.message, alpha, self.help, self.say_text, self.say_focus,
+                        cursor, self.speech is not None, busy)
         key = (self.tab, self.row, self.cam.view, self.spin, self.message, round(alpha, 2),
-               self.help, (w, h), tuple(self.state.values()))
+               self.help, (w, h), tuple(self.state.values()), self.say_text, self.say_focus, cursor,
+               self.speech is not None, busy, len(O.choices("voice")))
         if key != self.ui_key or self.ui.dirty:
             self.ui.render(model, (w, h))
             self.ui_key = key
@@ -366,10 +531,10 @@ class App:
         w, h = self.size()
         if self.args.transparent or self.args.bare:
             t = self.clock_time()
-            pose, blink = self.current_pose(t)
+            pose, blink, gaze = self.current_pose(t)
             bg = O.resolve(self.state)["bg"]
             self.renderer.draw_scene(self.rig, pose, self.cam, bg, (w, h), blink,
-                                     transparent=self.args.transparent, reserved=RESERVED)
+                                     transparent=self.args.transparent, reserved=RESERVED, gaze=gaze)
             surf = self.renderer.grab(view, alpha=self.args.transparent)
         else:
             surf = self.renderer.grab((w, h))
@@ -415,6 +580,8 @@ def parse_args(argv=None):
     ap.add_argument("--tab", choices=[n.lower() for n, _ in O.TABS], default="face",
                     help="side-panel tab to show first")
     ap.add_argument("--time", type=float, default=0.0, help="animation time for --shot")
+    ap.add_argument("--say", help="make the avatar say this (with --shot: lips at --time)")
+    ap.add_argument("--viseme", choices=sorted(speech_mod.VISEMES), help="hold one mouth shape")
     ap.add_argument("--seed", type=int, help="randomize using this seed")
     ap.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE")
     ap.add_argument("--preset", choices=list(O.PRESETS), help="apply an outfit preset")

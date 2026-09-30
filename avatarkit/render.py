@@ -224,6 +224,7 @@ class Renderer:
                   ("uKind", "uSpec", "uShine", "uColor2", "uPattern", "uFreckle", "uCenter", "uStrand")}
         self.ou = {n: glGetUniformLocation(self.oprog, n) for n in ("uPx", "uViewH", "uOutline")}
         self.blink = 0.0
+        self.gaze = (0.0, 0.0)
         self.view_h = 720.0
         glEnable(GL_MULTISAMPLE)
         glEnable(GL_DEPTH_TEST)
@@ -242,12 +243,14 @@ class Renderer:
         glLightfv(GL_LIGHT2, GL_POSITION, (0.2, 0.5, -1.0, 0.0))
 
     # ---- scene ---------------------------------------------------------------
-    def draw_scene(self, rig, pose, cam, bg, size, blink=0.0, transparent=False, reserved=0):
+    def draw_scene(self, rig, pose, cam, bg, size, blink=0.0, transparent=False, reserved=0,
+                   gaze=(0.0, 0.0)):
         """Draw into the whole window; `reserved` px on the right (the UI card) are kept free by
         shifting the lens, so the avatar stays centred in the remaining area."""
         w, h = size
         self.view_h = float(h)
         self.blink = blink
+        self.gaze = gaze                 # (pitch, yaw) degrees for the eyeballs
         glViewport(0, 0, w, h)
         glClearColor(0, 0, 0, 0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -332,10 +335,14 @@ class Renderer:
             glTranslatef(-px, -py, -pz)
         for m in node.meshes:
             if m.anim:
-                px, py, pz = m.anim[1]
+                kind, (px, py, pz) = m.anim
                 glPushMatrix()
                 glTranslatef(px, py, pz)
-                glRotatef(self.blink, 1, 0, 0)
+                if kind == "blink":
+                    glRotatef(self.blink, 1, 0, 0)
+                else:                     # "gaze": turn the eyeball; the iris follows on the sphere
+                    glRotatef(self.gaze[1], 0, 1, 0)
+                    glRotatef(self.gaze[0], 1, 0, 0)
                 glTranslatef(-px, -py, -pz)
                 draw(m)
                 glPopMatrix()

@@ -13,7 +13,7 @@ import pygame
 
 from . import options as O
 
-PANEL_W = 340
+PANEL_W = 360
 MARGIN = 14
 RESERVED = PANEL_W + 2 * MARGIN          # width taken from the 3D view
 
@@ -30,7 +30,18 @@ SHORTCUTS = [
     ("S / G", "save PNG / transparent PNG"), ("E / O", "export GLB / OBJ"),
     ("C / Ctrl+V", "copy / paste share code"), ("P", "import from a photo"),
     ("K / L", "save / load avatar.json"), ("H", "show or hide this sheet"),
+    ("T / Enter", "open Talk / speak the text"), ("Esc", "stop speaking"),
 ]
+
+PHRASES = [
+    ("Hello!", "Hello! I'm your new avatar. Nice to meet you."),
+    ("About me", "I'm a procedural character, built from thousands of tiny strands of hair, and now I can talk."),
+    ("Joke", "Why did the avatar go to school? To get a little more depth!"),
+    ("Thanks", "Thank you so much for making me look so good."),
+    ("Excited", "Wow! That is amazing. I can't believe it actually works!"),
+    ("Goodbye", "It was great talking to you. See you next time!"),
+]
+CUSTOM_LABELS = {"__say": "SAY SOMETHING", "__phrases": "QUICK PHRASES"}
 
 
 @dataclass
@@ -44,6 +55,11 @@ class UIModel:
     toast: str = ""
     toast_alpha: float = 0.0
     help: bool = False
+    say_text: str = ""
+    say_focus: bool = False
+    cursor_on: bool = False
+    speaking: bool = False
+    busy: bool = False           # a voice is being prepared
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +130,35 @@ def fade(w, h, color, top):
         a = int(255 * (1 - y / h) ** 1.5) if top else int(255 * (y / h) ** 1.5)
         pygame.draw.line(surf, color + (a,), (0, y), (w, y))
     return surf
+
+
+def wrap(s, bold, size, width):
+    """Word-wrap `s` to `width` px (long words are split)."""
+    lines = []
+    for para in s.split("\n"):
+        line = ""
+        for word in para.split(" "):
+            test = (line + " " + word).strip() if line else word
+            if text_width(test, bold, size) <= width:
+                line = test
+                continue
+            if line:
+                lines.append(line)
+            while text_width(word, bold, size) > width and len(word) > 1:
+                cut = len(word) - 1
+                while cut > 1 and text_width(word[:cut], bold, size) > width:
+                    cut -= 1
+                lines.append(word[:cut])
+                word = word[cut:]
+            line = word
+        lines.append(line)
+    return lines
+
+
+def chip_label(key, name):
+    if key == "voice":
+        return name.replace("Microsoft ", "").replace(" Desktop", "")
+    return name
 
 
 def rgb(c):
@@ -193,7 +238,7 @@ class UI:
             else:
                 x = 0
                 for j, (name, _) in enumerate(opts):
-                    w = text_width(name, False, 13) + 26
+                    w = text_width(chip_label(key, name), False, 13) + 26
                     if x + w > width:
                         x, y = 0, y + 34
                     items.append(("chip", pygame.Rect(x, y, w, 28), (key, j)))
@@ -202,6 +247,27 @@ class UI:
             y += 14
             sections.append((key, top, y - 14))
         return items, y, sections
+
+    @staticmethod
+    def layout_talk(width):
+        """The Talk tab's own controls: text box, Speak/Random buttons and quick phrases."""
+        items = [("label", pygame.Rect(0, 0, width, 20), "__say"),
+                 ("textbox", pygame.Rect(0, 26, width, 96), None)]
+        y = 26 + 96 + 10
+        half = (width - 8) // 2
+        items.append(("abutton", pygame.Rect(0, y, half, 38), "speak"))
+        items.append(("abutton", pygame.Rect(half + 8, y, half, 38), "random"))
+        y += 38 + 22
+        items.append(("label", pygame.Rect(0, y, width, 20), "__phrases"))
+        y += 26
+        x = 0
+        for i, (name, _) in enumerate(PHRASES):
+            w = text_width(name, False, 13) + 26
+            if x + w > width:
+                x, y = 0, y + 34
+            items.append(("phrase", pygame.Rect(x, y, w, 28), i))
+            x += w + 6
+        return items, y + 34 + 14
 
     # ---- rendering --------------------------------------------------------------------
     def render(self, m, size):
@@ -232,7 +298,7 @@ class UI:
                 surf.blit(pill(r.w, r.h, 9, COL["accent"]), r)
             elif hov == act:
                 surf.blit(pill(r.w, r.h, 9, COL["chip"]), r)
-            label = text(name, True, 13, COL["text"] if i == m.tab or hov == act else COL["muted"])
+            label = text(name, True, 12, COL["text"] if i == m.tab or hov == act else COL["muted"])
             surf.blit(label, label.get_rect(center=r.center))
             self.widgets.append((r, act))
 
@@ -242,6 +308,11 @@ class UI:
         clip = pygame.Rect(px + 6, top, pw - 12, py + ph - footer_h - top)
         keys = O.TABS[m.tab][1]
         items, total_h, sections = self.layout(keys, m.state, inner - 10)
+        if O.TABS[m.tab][0] == "Talk":
+            pre, y_pre = self.layout_talk(inner - 10)
+            items = pre + [(k, r.move(0, y_pre), d) for k, r, d in items]
+            sections = [(k, a + y_pre, b + y_pre) for k, a, b in sections]
+            total_h += y_pre
         self.max_scroll = max(0, total_h - clip.h)
         focus_key = keys[min(m.focus, len(keys) - 1)]
         sc = self.scroll.get(m.tab, 0)
@@ -264,6 +335,34 @@ class UI:
         for kind, rect, data in items:
             r = rect.move(ox, oy)
             if r.bottom < clip.top or r.top > clip.bottom:
+                continue
+            if kind == "textbox":
+                self._textbox(surf, r, m, hov)
+                self.widgets.append((r.clip(clip), ("textbox",)))
+                continue
+            if kind == "abutton":
+                act = ("say", data)
+                hv = hov == act
+                if data == "speak":
+                    label = "Preparing..." if m.busy else ("Stop" if m.speaking else "Speak")
+                    color = (COL["chip"] if m.busy else (COL["accent_hover"] if hv else COL["accent"]))
+                else:
+                    label, color = "Random line", (COL["chip_hover"] if hv else COL["chip"])
+                surf.blit(pill(r.w, r.h, 12, color), r)
+                t = text(label, True, 13, COL["text"])
+                surf.blit(t, t.get_rect(center=r.center))
+                self.widgets.append((r.clip(clip), act))
+                continue
+            if kind == "phrase":
+                act = ("phrase", data)
+                hv = hov == act
+                surf.blit(pill(r.w, r.h, 10, COL["chip_hover"] if hv else COL["chip"]), r)
+                t = text(PHRASES[data][0], False, 13, COL["text"] if hv else (200, 204, 220))
+                surf.blit(t, t.get_rect(center=r.center))
+                self.widgets.append((r.clip(clip), act))
+                continue
+            if kind == "label" and data in CUSTOM_LABELS:
+                surf.blit(text(CUSTOM_LABELS[data], True, 11, COL["muted"]), (r.x, r.y + 2))
                 continue
             if kind == "label":
                 key = data
@@ -289,7 +388,7 @@ class UI:
                     if hovered:
                         surf.blit(disc(30, (0, 0, 0, 0), COL["muted"], 2), r)
             else:
-                name = O.choices(key)[j][0]
+                name = chip_label(key, O.choices(key)[j][0])
                 bg = COL["accent"] if selected else (COL["chip_hover"] if hovered else COL["chip"])
                 surf.blit(pill(r.w, r.h, 10, bg), r)
                 label = text(name, False, 13, COL["text"] if selected or hovered else (200, 204, 220))
@@ -395,6 +494,24 @@ class UI:
         self.surface = surf
         self.dirty = False
         self.uploaded = False
+
+    def _textbox(self, surf, r, m, hov):
+        """Multi-line text field showing the tail of the text, with a blinking cursor."""
+        border = COL["accent"] if m.say_focus else (COL["chip_hover"] if hov == ("textbox",) else None)
+        surf.blit(pill(r.w, r.h, 12, COL["panel2"], border, 2) if border else pill(r.w, r.h, 12, COL["panel2"]), r)
+        lines = wrap(m.say_text, False, 14, r.w - 28) if m.say_text else []
+        shown = lines[-3:] if lines else []
+        if not m.say_text and not m.say_focus:
+            surf.blit(text("Type what the avatar should say...", False, 14, COL["faint"]), (r.x + 14, r.y + 12))
+        for i, line in enumerate(shown):
+            surf.blit(text(line, False, 14, COL["text"]), (r.x + 14, r.y + 12 + i * 22))
+        if m.say_focus and m.cursor_on:
+            last = shown[-1] if shown else ""
+            cx = r.x + 15 + text_width(last, False, 14)
+            cy = r.y + 12 + max(0, len(shown) - 1) * 22
+            pygame.draw.line(surf, COL["accent_hover"], (cx, cy + 1), (cx, cy + 18), 2)
+        count = text(f"{len(m.say_text)}/240", False, 11, COL["faint"])
+        surf.blit(count, (r.right - count.get_width() - 12, r.bottom - 20))
 
     # ---- OpenGL ---------------------------------------------------------------------------
     def draw(self, size):

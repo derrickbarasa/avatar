@@ -34,14 +34,18 @@ def build_avatar(v):
     node = rig.add_node("head", (0.0, -0.55, 0.03), "torso")
     node.add(head.mesh.outlined())
     brow_color = mix(hair, head_mod.DARK, 0.25)
+    brows = rig.add_node("brows", (0.0, 0.19, -0.35), "head")   # pivots behind the brow: raises them
     for s in (-1, 1):
         node.add(head_mod.eye_meshes(head, s, v["eyesize"], v["eyes"], skin,
                                      lid_l if s > 0 else lid_r))
-        node.add(head_mod.brow_mesh(head, s, v["brows"], brow_color, brow_dy, brow_tilt,
-                                    scale=0.5))   # thin base under the brow hairs
+        brows.add(head_mod.brow_mesh(head, s, v["brows"], brow_color, brow_dy, brow_tilt,
+                                     scale=0.5))   # thin base under the brow hairs
         node.add(head_mod.ear_meshes(s, skin))
-    node.add(_brows(head, v["brows"], brow_color, brow_dy, brow_tilt))
-    node.add(head_mod.lip_meshes(head, smile, mouth_w, skin, e_open))
+    brows.add(_brows(head, v["brows"], brow_color, brow_dy, brow_tilt))
+    rig.mouth = head_mod.Mouth(head, smile, mouth_w, skin)
+    rig.base_open = e_open
+    rig.add_node("mouth", node.pivot, "head")
+    rig.set_mouth(0.0)
     node.add(head_mod.earring_meshes(v["earrings"]))
 
     style, hat = v["hair"], v["hat"]

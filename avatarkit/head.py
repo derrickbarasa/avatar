@@ -66,6 +66,18 @@ class Head:
         w = 1.0 / (d2[idx] + 1e-6)
         return float((self._fz[idx] * w).sum() / w.sum())
 
+    def z_at_many(self, xs, ys):
+        """Vectorised `z_at` for arrays of x and y (same shape)."""
+        xs, ys = np.asarray(xs, np.float32).ravel(), np.asarray(ys, np.float32).ravel()
+        out = np.empty(len(xs))
+        fx, fy, fz = self._fx.astype(np.float32), self._fy.astype(np.float32), self._fz
+        for a in range(0, len(xs), 400):
+            d2 = (fx[None] - xs[a:a + 400, None]) ** 2 + (fy[None] - ys[a:a + 400, None]) ** 2
+            idx = np.argpartition(d2, 4, axis=1)[:, :4]
+            w = 1.0 / (np.take_along_axis(d2, idx, 1) + 1e-6)
+            out[a:a + 400] = (fz[idx] * w).sum(1) / w.sum(1)
+        return out
+
     def shell(self, margin, thickness, color, edge=0.05, **kw):
         """Offset copy of the head where margin > 0.
 
@@ -96,6 +108,7 @@ def eye_meshes(head, side, size, iris, skin, lid_delta=0.0):
     c = np.array([x, EYE_Y, head.z_at(x, EYE_Y) - 0.45 * r])
     ball = ellipsoid(c, (r,) * 3, (0.96, 0.95, 0.94), detail=40, shine=70, spec=0.4, kind="eye")
     ball.set(color2=tuple(iris), center=tuple(c))
+    ball.anim = ("gaze", tuple(c))
     # Upper eyelid: a dome tilted back so its edge arches over the eye.
     tilt, half = math.radians(22 + lid_delta), math.radians(90)
     direction = np.array([0.0, math.cos(tilt), -math.sin(tilt)])
@@ -122,29 +135,78 @@ def brow_mesh(head, side, thickness, color, dy=0.0, tilt=0.0, scale=1.0):
     return tube(head.on_face(xs, ys, 0.004), radii, color, sides=8, shine=10, spec=0.02, kind="hair")
 
 
+class Mouth:
+    """Lips that can be re-shaped every frame: open, wide (+) / pucker (-) and pressed.
+
+    Shapes are quantised and cached, so speech re-uses a few dozen small meshes.
+    """
+    GX = np.linspace(-0.26, 0.26, 53)
+    GY = np.linspace(MOUTH_Y - 0.17, MOUTH_Y + 0.10, 28)
+
+    def __init__(self, head, smile, width, skin):
+        self.smile, self.w0, self.skin = smile, 0.14 * width, tuple(skin)
+        self.lip = mix(skin, (0.72, 0.30, 0.34), 0.38)
+        if not hasattr(head, "_mouth_z"):
+            gx, gy = np.meshgrid(self.GX, self.GY)
+            head._mouth_z = head.z_at_many(gx, gy).reshape(gx.shape)
+        self.zg = head._mouth_z
+        self._cache = {}
+
+    def z(self, x, y):
+        """Face surface height at (x, y) by bilinear lookup in the precomputed grid."""
+        fx = np.clip((np.asarray(x, float) - self.GX[0]) / (self.GX[1] - self.GX[0]), 0, len(self.GX) - 1.001)
+        fy = np.clip((np.asarray(y, float) - self.GY[0]) / (self.GY[1] - self.GY[0]), 0, len(self.GY) - 1.001)
+        ix, iy = fx.astype(int), fy.astype(int)
+        tx, ty = fx - ix, fy - iy
+        g = self.zg
+        return (g[iy, ix] * (1 - tx) * (1 - ty) + g[iy, ix + 1] * tx * (1 - ty)
+                + g[iy + 1, ix] * (1 - tx) * ty + g[iy + 1, ix + 1] * tx * ty)
+
+    def meshes(self, open_=0.0, wide=0.0, press=0.0):
+        key = (int(round(min(max(open_, 0.0), 1.0) * 24)), int(round(min(max(wide, -1.0), 1.0) * 12)),
+               bool(press > 0.5))
+        if key not in self._cache:
+            self._cache[key] = self._build(key[0] / 24, key[1] / 12, key[2])
+        return self._cache[key]
+
+    def _build(self, o, wide, press):
+        w = self.w0 * (1 + 0.28 * wide)
+        xs = np.linspace(-w, w, 33)
+        u = xs / w
+        corner = self.smile * 0.055 * u ** 2 + 0.010 * wide * u ** 2
+        fall = np.sqrt(np.clip(1 - u ** 4, 0, 1))
+        r = max(0.0, -wide)
+        thick = (1 + 0.55 * r) * (0.7 if press else 1.0)
+        drop = o * 0.105 * fall ** 0.8
+        rise = o * 0.016 * fall
+        base = MOUTH_Y + corner
+
+        def path(y, lift=0.0):
+            return np.stack([xs, y, self.z(xs, y) + lift], -1)
+
+        out = []
+        if o > 0.05:
+            zc = float(self.z(0.0, MOUTH_Y)) - 0.015
+            span = float(drop.max())
+            cy = MOUTH_Y + float(corner.mean()) - 0.45 * span
+            out.append(ellipsoid((0, cy, zc), (w * 0.88, 0.008 + 0.56 * span, 0.022), (0.22, 0.05, 0.06), detail=20))
+            out.append(ellipsoid((0, MOUTH_Y + float(corner.mean()) + 0.4 * float(rise.max()) - 0.004, zc + 0.008),
+                                 (w * 0.62 * (1 - 0.3 * r), 0.011, 0.012), (0.96, 0.95, 0.92), detail=16))
+            if o > 0.45:
+                out.append(ellipsoid((0, cy - 0.30 * span, zc + 0.002), (w * 0.40, 0.010 + 0.014 * o, 0.014),
+                                     (0.75, 0.32, 0.36), detail=14))
+        else:
+            out.append(tube(path(base, 0.002), 0.005 + 0.003 * fall, (0.25, 0.10, 0.10), sides=6))
+        out.append(tube(path(base + 0.016 * fall * thick + rise), (0.003 + 0.016 * fall) * thick, self.lip,
+                        sides=10, shine=35, spec=0.2, kind="glossy"))
+        out.append(tube(path(base - 0.018 * fall * thick - drop), (0.003 + 0.022 * fall) * thick, self.lip,
+                        sides=10, shine=35, spec=0.2, kind="glossy"))
+        return out
+
+
 def lip_meshes(head, smile, width, skin, open_=0.0):
-    w = 0.14 * width
-    xs = np.linspace(-w, w, 33)
-    u = xs / w
-    corner = smile * 0.055 * u ** 2
-    fall = np.sqrt(np.clip(1 - u ** 4, 0, 1))
-    lip = mix(skin, (0.72, 0.30, 0.34), 0.38)
-    drop = open_ * 0.05 * fall
-    out = []
-    if open_ > 0.05:
-        zc = head.z_at(0, MOUTH_Y) - 0.015
-        cy = MOUTH_Y + corner.mean() - 0.02 * open_
-        out.append(ellipsoid((0, cy, zc), (w * 0.85, 0.01 + 0.035 * open_, 0.02),
-                             (0.22, 0.05, 0.06), detail=20))
-        out.append(ellipsoid((0, MOUTH_Y + corner.mean() + 0.012, zc + 0.008),
-                             (w * 0.62, 0.011, 0.012), (0.96, 0.95, 0.92), detail=16))
-    out.append(tube(head.on_face(xs, MOUTH_Y + corner, 0.002), 0.005 + 0.003 * fall,
-                    (0.25, 0.10, 0.10), sides=6))
-    out.append(tube(head.on_face(xs, MOUTH_Y + corner + 0.016 * fall, 0.0),
-                    0.003 + 0.016 * fall, lip, sides=10, shine=35, spec=0.2, kind="glossy"))
-    out.append(tube(head.on_face(xs, MOUTH_Y + corner - 0.018 * fall - drop, 0.0),
-                    0.003 + 0.022 * fall, lip, sides=10, shine=35, spec=0.2, kind="glossy"))
-    return out
+    """Static lips at a given openness (kept for tests and simple callers)."""
+    return Mouth(head, smile, width, skin).meshes(open_)
 
 
 def ear_meshes(side, skin):

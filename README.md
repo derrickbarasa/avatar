@@ -15,8 +15,14 @@ feature from a tabbed side panel, strike a pose, and export the result.
 - **Outfit:** tee, long sleeve, tank, hoodie, jacket; jeans, shorts, skirt;
   sneakers, boots or barefoot; stripes, dots, plaid or a chest emblem.
 - **Extras:** necklace, scarf, watch, backpack.
-- **Poses:** relaxed, A-pose, wave, hands on hips, cheer, walk, plus idle
-  animation (breathing sway, head movement, blinking).
+- **Poses and life:** relaxed, A-pose, wave, hands on hips, cheer, walk and dance,
+  plus idle animation: breathing sway, head movement, blinking and darting
+  eye glances.
+- **Talking:** type a line (or pick a quick phrase) and the avatar says it with
+  your system voice. The lips form real mouth shapes (open, spread, pucker,
+  pressed, teeth and tongue) timed to the audio, and while it talks it nods on
+  stressed syllables, raises its brows, gestures with its hands, holds eye
+  contact and turns to face you.
 - **Presets and sharing:** eight outfit presets, and a short share code that
   captures a whole avatar.
 
@@ -40,6 +46,9 @@ extra tests.
 | ↑ / ↓ , ← / → | move the focus between options / change the focused option |
 | Wheel | scroll the panel, or zoom when over the scene |
 | H | show or hide the shortcut sheet |
+| T | open the Talk tab and start typing |
+| Enter | speak the text (again to stop); inside the text box it speaks and unfocuses |
+| Esc | stop speaking (then quit) |
 | R | randomize everything |
 | [ / ] | previous / next outfit preset |
 | V | cycle camera: bust / face / full body |
@@ -53,7 +62,7 @@ extra tests.
 
 ## Interface
 
-A floating card holds six tabs (Face, Hair, Body, Outfit, Extras, Scene). Colour
+A floating card holds seven tabs (Face, Hair, Body, Outfit, Extras, Scene, Talk). Colour
 options are swatches, everything else is a row of chips; long tabs scroll. The
 share code and the Random / Photo / PNG / GLB buttons sit at the bottom of the
 card. A pill over the scene switches between bust, face and full-body views and
@@ -70,7 +79,22 @@ python avatar.py --shot logo.png --transparent --preset Streetwear
 python avatar.py --sheet 12 --shot gallery.png --seed 42     # contact sheet of random avatars
 python avatar.py --code AV2-101...                           # start from a share code
 python avatar.py --photo selfie.jpg                          # suggest options from a photo
+python avatar.py --say "Hello, I can talk now."              # start speaking straight away
+python avatar.py --shot mouth.png --say "Hello there" --time 0.4   # the lips 0.4 s into the line
+python avatar.py --shot ooh.png --view face --viseme OO      # hold one mouth shape
 ```
+
+## Talking
+
+The **Talk** tab has the text box, Speak / Random line buttons, quick phrases,
+a voice picker, speech speed and a gestures switch. Speech uses what the
+operating system already has, so there is nothing to install: Windows SAPI
+voices (via PowerShell), `say` on macOS, or `espeak-ng` / `espeak` on Linux.
+Synthesis runs in the background, then the audio is analysed: the text is turned
+into mouth shapes, stretched over the part of the audio where someone is
+speaking, and scaled by loudness so the mouth closes in pauses and opens wider on
+stressed syllables. If no voice or audio device is available the avatar still
+mimes the sentence, timed from the text alone.
 
 `--set OPTION=VALUE` takes the option keys and value names shown in the panel
 (for example `hair=Mohawk`, `pattern=Stripes`, `pose=Hands on hips`).
@@ -103,11 +127,12 @@ avatarkit/
   head.py hair.py    head, face details, hair layers, hats, facial hair
   strands.py         strand growth (physics-lite) and strand mesh builder
   body.py            torso, limbs, clothes, hands, accessories (as rig nodes)
-  rig.py poses.py    skeleton and pose / animation functions
+  rig.py poses.py    skeleton, poses, idle animation, gaze and talking gestures
   builder.py         assembles an avatar from options
   render.py          GLSL cel shader, outline pass, camera, capture
   ui.py app.py       interface overlay (card, chips, toasts), input, command line
   exporters.py       OBJ and GLB writers
   photo.py           photo -> option suggestions
+  speech.py tts.py   text -> mouth shapes and lip-sync timeline; system text-to-speech
 tests/               python -m unittest discover -s tests
 ```

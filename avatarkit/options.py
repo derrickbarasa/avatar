@@ -82,7 +82,7 @@ BODY_TYPES = [
 ]
 PATTERNS = [("None", 0), ("Stripes", 1), ("Dots", 2), ("Plaid", 3), ("Emblem", 4)]
 POSES = [("Relaxed", "relaxed"), ("A-pose", "apose"), ("Wave", "wave"),
-         ("Hands on hips", "hips"), ("Cheer", "cheer"), ("Walk", "walk")]
+         ("Hands on hips", "hips"), ("Cheer", "cheer"), ("Walk", "walk"), ("Dance", "dance")]
 
 # key, label, [(name, value)...], default index
 _DEFS = [
@@ -129,6 +129,9 @@ _DEFS = [
     ("pose", "Pose", POSES, 0),
     ("animate", "Animation", [("On", True), ("Off", False)], 0),
     ("bg", "Background", BACKGROUNDS, 0),
+    ("voice", "Voice", [("Default", "")], 0),
+    ("speed", "Speech speed", [("Slow", "Slow"), ("Normal", "Normal"), ("Fast", "Fast")], 1),
+    ("gestures", "Gestures", [("On", True), ("Off", False)], 0),
 ]
 
 OPTIONS = [(k, label, opts) for k, label, opts, _ in _DEFS]
@@ -145,6 +148,7 @@ TABS = [
                 "shoestyle", "shoes"]),
     ("Extras", ["necklace", "scarf", "scarfcolor", "watch", "bag", "bagcolor"]),
     ("Scene", ["pose", "animate", "bg", "preset"]),
+    ("Talk", ["voice", "speed", "gestures"]),
 ]
 COLOR_KEYS = {"skin", "eyes", "haircolor", "hatcolor", "topcolor", "patterncolor",
               "pantscolor", "shoes", "scarfcolor", "bagcolor"}
@@ -191,10 +195,20 @@ _BY_KEY["preset"] = ("Outfit preset", _DEFS[-1][2])
 OPTION_KEYS = [k for k, _, _ in OPTIONS]
 
 # Options that don't change the meshes, so no rebuild is needed when they change.
-NON_BUILD_KEYS = {"pose", "animate", "bg", "preset"}
-NO_RANDOM = {"pose", "animate", "bg", "preset"}
-CODE_KEYS = [k for k in OPTION_KEYS if k not in ("preset", "animate")]
+TALK_KEYS = {"voice", "speed", "gestures"}
+NON_BUILD_KEYS = {"pose", "animate", "bg", "preset"} | TALK_KEYS
+NO_RANDOM = {"pose", "animate", "bg", "preset"} | TALK_KEYS
+CODE_KEYS = [k for k in OPTION_KEYS if k not in ("preset", "animate") and k not in TALK_KEYS]
 CODE_PREFIX = "AV2-"
+
+
+def set_choices(key, names):
+    """Replace an option's choices at run time (the installed voices are only known then)."""
+    opts = [(n, n) for n in names] or [("Default", "")]
+    for i, (k, lab, _) in enumerate(OPTIONS):
+        if k == key:
+            OPTIONS[i] = (k, lab, opts)
+    _BY_KEY[key] = (_BY_KEY[key][0], opts)
 
 
 def label(key):

@@ -30,6 +30,9 @@ class Rig:
         self.nodes = {}
         self.root = None
         self.ground_y = -7.3
+        self.mouth = None          # head.Mouth, set by the builder
+        self.base_open = 0.0       # resting openness from the chosen expression
+        self._mouth_key = None
 
     def add_node(self, name, pivot, parent=None):
         node = Node(name, pivot, self.nodes[parent] if parent else None)
@@ -37,6 +40,15 @@ class Rig:
         if self.root is None:
             self.root = node
         return node
+
+    def set_mouth(self, open_=0.0, wide=0.0, press=0.0):
+        """Reshape the lips (speech adds to the expression's resting openness)."""
+        if self.mouth is None:
+            return
+        meshes = self.mouth.meshes(min(1.0, self.base_open + open_), wide, press)
+        if meshes is not self._mouth_key:
+            self.nodes["mouth"].meshes = meshes
+            self._mouth_key = meshes
 
     def __getitem__(self, name):
         return self.nodes[name]

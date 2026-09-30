@@ -160,8 +160,8 @@ class StrandTests(unittest.TestCase):
 
 class FacialStrandTests(unittest.TestCase):
     def head_strands(self, **changes):
-        rig = default_rig(**changes)
-        return [m for m in rig["head"].meshes if m.strand]
+        rig = default_rig(**changes)          # brows live in their own node so they can be raised
+        return [m for n in ("head", "brows") for m in rig[n].meshes if m.strand]
 
     def test_beard_mustache_and_brows_are_strands(self):
         none = self.head_strands(hair="Bald")                       # brows only
@@ -184,14 +184,14 @@ class FacialStrandTests(unittest.TestCase):
         rig = default_rig(hair="Bald", facial="Beard")
         head = cached_head(tuple(O.resolve(dict(O.DEFAULT_STATE))["skin"]), 0.28, 1.0)
         skin = Skin(head, np.ones(len(head.P), bool))
-        beard = [m for m in rig["head"].meshes if m.strand][-1]
+        beard = [m for m in rig["head"].meshes if m.strand and m.part == "facial"][0]
         v = beard.v.astype(float)[::7]
         j = skin.nearest(v)
         depth = ((v - skin.v[j]) * skin.n[j]).sum(1)
         self.assertGreater(np.percentile(depth, 2), -0.01)   # (almost) nothing dips into the face
 
     def test_beard_hangs_below_the_chin(self):
-        beard = self.head_strands(hair="Bald", facial="Beard")[-1]
+        beard = [m for m in self.head_strands(hair="Bald", facial="Beard") if m.part == "facial"][0]
         self.assertLess(beard.v[:, 1].min(), -0.62)
 
 
