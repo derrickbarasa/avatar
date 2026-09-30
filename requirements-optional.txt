@@ -4,3 +4,5 @@ opencv-python-headless<5
 trimesh
 # optional: real-portrait test for the photo import
 scikit-image
+# optional: MP4 clips with audio when ffmpeg is not installed
+imageio-ffmpeg

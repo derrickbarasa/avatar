@@ -47,6 +47,9 @@ class Mesh:
         self.center = (0.0, 0.0, 0.0)
         self.anim = None
         self.tangents, self.strand = None, False   # hair strands: per-vertex direction
+        self.n_strands, self.faces_per_strand = 0, 0
+        self.strand_aux, self.swing = None, 0.0   # per-vertex (radius, t along strand); sway amount 0..1
+        self.jaw_follow = False                    # moves with the jaw when the mouth opens
 
     def outlined(self):
         self.outline = not (self.joint or self.strand)
@@ -56,6 +59,18 @@ class Mesh:
         for k, val in attrs.items():
             setattr(self, k, val)
         return self
+
+
+def strand_faces(mesh, fraction=1.0):
+    """Face indices of the first `fraction` of a strand mesh's strands (all faces otherwise).
+
+    Strands are stored one after another and were rooted at random points, so a prefix
+    is an evenly thinned head of hair: used for level-of-detail and smaller exports.
+    """
+    if not mesh.strand or fraction >= 1.0 or not mesh.n_strands:
+        return mesh.f
+    keep = max(1, int(mesh.n_strands * fraction))
+    return mesh.f[:keep * mesh.faces_per_strand * 3]
 
 
 def merge(meshes, color=None):

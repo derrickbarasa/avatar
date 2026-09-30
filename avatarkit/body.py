@@ -4,7 +4,7 @@ import math
 import numpy as np
 
 from .head import GOLD
-from .mathutil import catmull, mix
+from .mathutil import catmull, mix, rot_z
 from .mesh import ellipsoid, loft, tube
 from .rig import Rig
 
@@ -17,6 +17,7 @@ def torso_keys(bt):
     mid = (chest + waist) / 2
     return np.array([  # y, half-width, front depth, back depth
         (-1.02, 0.30, 0.27, 0.27),
+        (-1.075, 0.47 * sh, 0.30, 0.30),
         (-1.15, 0.72 * sh, 0.34, 0.34),
         (-1.32, 0.90 * sh, 0.40, 0.38),
         (-1.80, 0.86 * sh * chest, 0.42 + bust, 0.40),
@@ -55,23 +56,40 @@ def neck_mesh(skin):
     return tube(neck, np.linspace(0.235, 0.27, 10), skin, kind="skin")
 
 
-def hand_meshes(wrist, side, skin):
-    """Palm, four fingers and a thumb, hanging down with the palm facing the body."""
+FINGER_CODES = ("th", "ix", "md", "rg", "pk")      # thumb, index, middle, ring, pinky
+
+
+def hand_parts(wrist, side, skin):
+    """Palm mesh plus each finger as (code, proximal mesh, distal mesh, knuckle, joint) pieces.
+
+    Fingers hang down from the wrist with the palm facing the body; the proximal piece bends
+    about the knuckle and the distal piece about the middle joint, so a fist can really curl.
+    """
     wx, wy, wz = wrist
     k = 1.25  # hand scale, so the hands match the forearm width
     sk = dict(kind="skin")
-    out = [ellipsoid((wx, wy - 0.10 * k, wz), (0.045 * k, 0.095 * k, 0.075 * k), skin, detail=16, **sk)]
-    for dz, length in zip((-0.05, -0.017, 0.017, 0.05), (0.12, 0.14, 0.13, 0.10)):
-        t = np.linspace(0, 1, 5)
-        path = np.stack([wx - side * 0.03 * k * t ** 2, wy - 0.17 * k - length * k * t,
-                         np.full(5, wz + dz * k)], -1)
-        out.append(tube(path, np.linspace(0.02, 0.013, 5) * k, skin, sides=8, thin=True, **sk))
-    thumb = np.array([(wx - side * 0.01, wy - 0.06 * k, wz + 0.06 * k),
-                      (wx - side * 0.02 * k, wy - 0.11 * k, wz + 0.10 * k),
-                      (wx - side * 0.03 * k, wy - 0.17 * k, wz + 0.115 * k)])
-    out.append(tube(catmull(thumb, 6), np.linspace(0.024, 0.015, 6) * k, skin, sides=8,
-                    thin=True, **sk))
-    return out
+    palm = ellipsoid((wx, wy - 0.10 * k, wz), (0.045 * k, 0.095 * k, 0.075 * k), skin, detail=16, **sk)
+    fingers = []
+    for code, dz, length in zip(FINGER_CODES[1:], (-0.05, -0.017, 0.017, 0.05), (0.12, 0.14, 0.13, 0.10)):
+        base = np.array([wx, wy - 0.17 * k, wz + dz * k])
+        mid = base + np.array([0.0, -0.55 * length * k, 0.0])
+        tip = base + np.array([0.0, -length * k, 0.0])
+        prox = tube(np.linspace(base, mid, 4), np.linspace(0.02, 0.0165, 4) * k, skin, sides=8, thin=True, **sk)
+        dist = tube(np.linspace(mid, tip, 4), np.linspace(0.0165, 0.013, 4) * k, skin, sides=8, thin=True, **sk)
+        fingers.append((code, prox, dist, base, mid))
+    t0 = np.array([wx - side * 0.01, wy - 0.06 * k, wz + 0.06 * k])
+    t1 = np.array([wx - side * 0.02 * k, wy - 0.11 * k, wz + 0.10 * k])
+    t2 = np.array([wx - side * 0.03 * k, wy - 0.17 * k, wz + 0.115 * k])
+    prox = tube(np.linspace(t0, t1, 4), np.linspace(0.024, 0.02, 4) * k, skin, sides=8, thin=True, **sk)
+    dist = tube(np.linspace(t1, t2, 4), np.linspace(0.02, 0.015, 4) * k, skin, sides=8, thin=True, **sk)
+    fingers.insert(0, ("th", prox, dist, t0, t1))
+    return palm, fingers
+
+
+def hand_meshes(wrist, side, skin):
+    """All hand meshes as one flat list (for callers that don't need the joints)."""
+    palm, fingers = hand_parts(wrist, side, skin)
+    return [palm] + [m for _, p, d, _, _ in fingers for m in (p, d)]
 
 
 def arm_keys(s, build, radius, height):
@@ -104,12 +122,17 @@ def build_body(v):
     skin = tuple(v["skin"])
     top, pants, shoestyle = v["top"], v["pants"], v["shoestyle"]
     tcol, pcol, scol = v["topcolor"], v["pantscolor"], v["shoes"]
+    dress = top == "dress"
+    if dress:                                  # a dress is a short-sleeved top with a long flared skirt
+        top, pants, pcol = "tee", "skirt", tcol
     body_type, build, height = v["bodytype"], v["build"], v["height"]
     radius = math.sqrt(build) * body_type[5]
     torso = Torso(body_type, build)
     sk = dict(kind="skin")
     bulk = {"hoodie": 0.07, "jacket": 0.06}.get(top, 0.035)
     hem = -3.72 if bulk < 0.05 else -3.85
+    if dress:
+        hem = -3.4
     pkind = "denim" if pants == "jeans" else "cloth"
 
     def garment(mesh, chest=False):
@@ -149,11 +172,13 @@ def build_body(v):
         trunk.add(tube(collar, np.full(len(phi), 0.06), mix(tcol, (0, 0, 0), 0.15), sides=10,
                        cap_ends=False, **CLOTH))
     if pants == "skirt":
-        ys = np.linspace(-3.2, -5.05, 16)
-        t = (-ys - 3.2) / 1.85
-        a = (0.70 * build + 0.10) + 0.45 * t ** 1.3
-        depth = 0.44 + 0.30 * t ** 1.3
-        root.add(loft(ys, a, depth, depth, pcol, cap_ends=False, **CLOTH))
+        hem_y = -5.45 if dress else -5.05
+        ys = np.linspace(-3.2, hem_y, 16)
+        t = (-ys - 3.2) / (-hem_y - 3.2)
+        a = (0.70 * build + 0.10) + (0.62 if dress else 0.45) * t ** 1.3
+        depth = 0.44 + (0.42 if dress else 0.30) * t ** 1.3
+        skirt = loft(ys, a, depth, depth, pcol, cap_ends=False, **CLOTH)
+        root.add(garment(skirt) if dress else skirt)
     else:
         root.add(torso.section(-3.25, -4.30, 12, 0.03, pcol, cap_ends=False, shine=12, spec=0.04, kind=pkind))
 
@@ -175,6 +200,20 @@ def build_body(v):
         if v["necklace"] == "pendant":
             trunk.add(ellipsoid((0, ys[16] - 0.04, zs[16] + 0.015), (0.035, 0.05, 0.02), GOLD,
                                 detail=14, shine=80, spec=0.6, kind="glossy"))
+    if v["neckwear"] != "none":
+        nc = v["neckcolor"]
+        y0 = -1.10
+        z0 = float(torso.front_z(y0, 0.0, bulk)) + 0.035
+        knot = ellipsoid((0, y0, z0), (0.045, 0.05, 0.035), nc, detail=14, **CLOTH)
+        if v["neckwear"] == "bowtie":
+            trunk.add(knot)
+            for s in (-1, 1):
+                trunk.add(ellipsoid((s * 0.115, y0, z0 - 0.005), (0.10, 0.06, 0.03), nc,
+                                    rot=rot_z(s * -0.25), detail=16, **CLOTH))
+        else:
+            zt = float(torso.front_z(-1.62, 0.0, bulk)) + 0.025
+            trunk.add(knot)
+            trunk.add(ellipsoid((0, -1.62, zt), (0.075, 0.46, 0.022), nc, detail=20, **CLOTH))
     if v["bag"] != "none":
         c = v["bagcolor"]
         strap_c = mix(c, (0, 0, 0), 0.35)
@@ -199,7 +238,13 @@ def build_body(v):
         up, lo = catmull(ak, 16, 0.0, 2.0), catmull(ak, 18, 2.0, 4.0)
         arm.add(tube(up[:, :3], up[:, 3], skin, **sk), ellipsoid(ak[0, :3], (ak[0, 3],) * 3, skin, **sk).set(joint=True))
         fore.add(tube(lo[:, :3], lo[:, 3], skin, **sk), ellipsoid(ak[2, :3], (ak[2, 3],) * 3, skin, **sk).set(joint=True))
-        hand.add(hand_meshes(ak[4, :3], s, skin))
+        palm, fingers = hand_parts(ak[4, :3], s, skin)
+        hand.add(palm)
+        for code, prox, dist, knuckle, joint in fingers:
+            pn = rig.add_node(f"{code}1{name}", knuckle, "hand" + name)
+            dn = rig.add_node(f"{code}2{name}", joint, f"{code}1{name}")
+            pn.add(prox)
+            dn.add(dist)
         grow = bulk - 0.005
         if top != "tank":
             if top == "tee":

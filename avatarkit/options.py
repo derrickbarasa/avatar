@@ -98,20 +98,22 @@ _DEFS = [
     ("brows", "Eyebrows", [("Thin", 0.7), ("Normal", 1.0), ("Thick", 1.5)], 1),
     ("facial", "Facial hair", [("None", "none"), ("Mustache", "mustache"), ("Beard", "beard")], 0),
     ("glasses", "Glasses", [("None", "none"), ("Round", "round"), ("Square", "square"),
-                            ("Sunglasses", "sun")], 0),
+                            ("Sunglasses", "sun"), ("Cat-eye", "cat"), ("Aviator", "aviator")], 0),
     ("earrings", "Earrings", [("None", "none"), ("Studs", "studs"), ("Hoops", "hoops")], 0),
     ("hair", "Hair style", [("Bald", "bald"), ("Buzz", "buzz"), ("Short", "short"),
                             ("Curly", "curly"), ("Long", "long"), ("Bob", "bob"),
                             ("Bangs", "bangs"), ("Bun", "bun"), ("Ponytail", "ponytail"),
-                            ("Quiff", "quiff"), ("Mohawk", "mohawk"), ("Afro", "afro")], 2),
+                            ("Quiff", "quiff"), ("Mohawk", "mohawk"), ("Afro", "afro"),
+                            ("Pigtails", "pigtails"), ("Braid", "braid")], 2),
     ("haircolor", "Hair color", HAIR_COLORS, 2),
-    ("hat", "Hat", [("None", "none"), ("Beanie", "beanie"), ("Cap", "cap")], 0),
+    ("hat", "Hat", [("None", "none"), ("Beanie", "beanie"), ("Cap", "cap"), ("Bucket", "bucket"),
+                    ("Top hat", "tophat")], 0),
     ("hatcolor", "Hat color", CLOTH_COLORS, 2),
     ("bodytype", "Body type", BODY_TYPES, 1),
     ("build", "Build", [("Slim", 0.9), ("Average", 1.0), ("Broad", 1.12)], 1),
     ("height", "Height", [("Short", 0.93), ("Average", 1.0), ("Tall", 1.08)], 1),
     ("top", "Top", [("T-shirt", "tee"), ("Long sleeve", "long"), ("Tank top", "tank"),
-                    ("Hoodie", "hoodie"), ("Jacket", "jacket")], 0),
+                    ("Hoodie", "hoodie"), ("Jacket", "jacket"), ("Dress", "dress")], 0),
     ("topcolor", "Top color", CLOTH_COLORS, 7),
     ("pattern", "Top pattern", PATTERNS, 0),
     ("patterncolor", "Pattern color", CLOTH_COLORS, 0),
@@ -132,6 +134,11 @@ _DEFS = [
     ("voice", "Voice", [("Default", "")], 0),
     ("speed", "Speech speed", [("Slow", "Slow"), ("Normal", "Normal"), ("Fast", "Fast")], 1),
     ("gestures", "Gestures", [("On", True), ("Off", False)], 0),
+    ("shadows", "Shadows", [("On", True), ("Off", False)], 0),
+    ("physics", "Hair physics", [("On", True), ("Off", False)], 0),
+    ("headphones", "Headphones", [("None", False), ("Headphones", True)], 0),
+    ("neckwear", "Neckwear", [("None", "none"), ("Bow tie", "bowtie"), ("Tie", "tie")], 0),
+    ("neckcolor", "Neckwear color", CLOTH_COLORS, 2),
 ]
 
 OPTIONS = [(k, label, opts) for k, label, opts, _ in _DEFS]
@@ -146,12 +153,14 @@ TABS = [
     ("Body", ["bodytype", "build", "height"]),
     ("Outfit", ["top", "topcolor", "pattern", "patterncolor", "pants", "pantscolor",
                 "shoestyle", "shoes"]),
-    ("Extras", ["necklace", "scarf", "scarfcolor", "watch", "bag", "bagcolor"]),
-    ("Scene", ["pose", "animate", "bg", "preset"]),
+    ("Extras", ["necklace", "neckwear", "neckcolor", "scarf", "scarfcolor", "headphones", "watch", "bag",
+                "bagcolor"]),
+    ("Scene", ["pose", "animate", "shadows", "physics", "bg", "preset"]),
     ("Talk", ["voice", "speed", "gestures"]),
+    ("Library", []),
 ]
 COLOR_KEYS = {"skin", "eyes", "haircolor", "hatcolor", "topcolor", "patterncolor",
-              "pantscolor", "shoes", "scarfcolor", "bagcolor"}
+              "pantscolor", "shoes", "scarfcolor", "bagcolor", "neckcolor"}
 
 # Outfit presets: only the listed options change, so the face stays yours.
 PRESETS = {
@@ -196,10 +205,12 @@ OPTION_KEYS = [k for k, _, _ in OPTIONS]
 
 # Options that don't change the meshes, so no rebuild is needed when they change.
 TALK_KEYS = {"voice", "speed", "gestures"}
-NON_BUILD_KEYS = {"pose", "animate", "bg", "preset"} | TALK_KEYS
-NO_RANDOM = {"pose", "animate", "bg", "preset"} | TALK_KEYS
-CODE_KEYS = [k for k in OPTION_KEYS if k not in ("preset", "animate") and k not in TALK_KEYS]
+VIEW_KEYS = {"shadows", "physics"}          # how it is drawn, not what the avatar is
+NON_BUILD_KEYS = {"pose", "animate", "bg", "preset"} | TALK_KEYS | VIEW_KEYS
+NO_RANDOM = {"pose", "animate", "bg", "preset"} | TALK_KEYS | VIEW_KEYS
+CODE_KEYS = [k for k in OPTION_KEYS if k not in ("preset", "animate") and k not in TALK_KEYS | VIEW_KEYS]
 CODE_PREFIX = "AV2-"
+LEGACY_CODE_LEN = 35          # codes made before the newest options were added are shorter
 
 
 def set_choices(key, names):
@@ -209,6 +220,12 @@ def set_choices(key, names):
         if k == key:
             OPTIONS[i] = (k, lab, opts)
     _BY_KEY[key] = (_BY_KEY[key][0], opts)
+
+
+def add_preset(name, mapping):
+    """Register an outfit preset at run time (used by content packs)."""
+    PRESETS[name] = dict(mapping)
+    _BY_KEY["preset"][1].append((name, name))
 
 
 def label(key):
@@ -276,7 +293,7 @@ def decode_state(code, state):
     if not code.startswith(CODE_PREFIX):
         raise ValueError("Not an avatar code")
     digits = code[len(CODE_PREFIX):].lower()
-    if len(digits) != len(CODE_KEYS) or any(c not in _DIGITS for c in digits):
+    if not (LEGACY_CODE_LEN <= len(digits) <= len(CODE_KEYS)) or any(c not in _DIGITS for c in digits):
         raise ValueError("Avatar code has the wrong length")
     new = {}
     for key, ch in zip(CODE_KEYS, digits):
@@ -284,4 +301,6 @@ def decode_state(code, state):
         if idx >= len(_BY_KEY[key][1]):
             raise ValueError(f"Invalid value for {key}")
         new[key] = idx
+    for key in CODE_KEYS[len(digits):]:       # options the code predates keep their defaults
+        new[key] = DEFAULT_STATE[key]
     state.update(new)

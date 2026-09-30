@@ -46,7 +46,7 @@ class OptionTests(unittest.TestCase):
 
     def test_share_code_rejects_garbage(self):
         state = dict(O.DEFAULT_STATE)
-        for bad in ("", "hello", "AV2-abc", O.encode_state(state)[:-1], "AV2-" + "z" * len(O.CODE_KEYS)):
+        for bad in ("", "hello", "AV2-abc", O.encode_state(state)[:O.LEGACY_CODE_LEN + 3], "AV2-" + "z" * len(O.CODE_KEYS)):
             with self.assertRaises(ValueError):
                 O.decode_state(bad, state)
 
@@ -161,22 +161,22 @@ class StrandTests(unittest.TestCase):
 class FacialStrandTests(unittest.TestCase):
     def head_strands(self, **changes):
         rig = default_rig(**changes)          # brows live in their own node so they can be raised
-        return [m for n in ("head", "brows") for m in rig[n].meshes if m.strand]
+        return [m for n in ("head", "brows", "browL", "browR") for m in rig[n].meshes if m.strand]
 
     def test_beard_mustache_and_brows_are_strands(self):
         none = self.head_strands(hair="Bald")                       # brows only
         stache = self.head_strands(hair="Bald", facial="Mustache")
         beard = self.head_strands(hair="Bald", facial="Beard")
-        self.assertEqual(len(none), 1)
-        self.assertEqual(len(stache), 2)
-        self.assertEqual(len(beard), 2)
+        self.assertEqual(len(none), 2)              # one brow mesh per side
+        self.assertEqual(len(stache), 3)
+        self.assertEqual(len(beard), 3)
         vertex_count = lambda ms: sum(len(m.v) for m in ms)
         self.assertGreater(vertex_count(beard), vertex_count(stache) * 3)
 
     def test_brow_thickness_changes_hair_count(self):
-        thin = self.head_strands(hair="Bald", brows="Thin")[0]
-        thick = self.head_strands(hair="Bald", brows="Thick")[0]
-        self.assertGreater(len(thick.v), len(thin.v) * 1.5)
+        thin = sum(len(m.v) for m in self.head_strands(hair="Bald", brows="Thin"))
+        thick = sum(len(m.v) for m in self.head_strands(hair="Bald", brows="Thick"))
+        self.assertGreater(thick, thin * 1.5)
 
     def test_facial_strands_stay_outside_the_skin(self):
         from avatarkit.head import cached_head

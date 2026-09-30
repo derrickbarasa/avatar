@@ -41,11 +41,11 @@ class Rig:
             self.root = node
         return node
 
-    def set_mouth(self, open_=0.0, wide=0.0, press=0.0):
+    def set_mouth(self, open_=0.0, wide=0.0, press=0.0, smile=0.0):
         """Reshape the lips (speech adds to the expression's resting openness)."""
         if self.mouth is None:
             return
-        meshes = self.mouth.meshes(min(1.0, self.base_open + open_), wide, press)
+        meshes = self.mouth.meshes(min(1.0, self.base_open + open_), wide, press, smile)
         if meshes is not self._mouth_key:
             self.nodes["mouth"].meshes = meshes
             self._mouth_key = meshes

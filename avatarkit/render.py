@@ -1,5 +1,5 @@
-"""OpenGL rendering: cel-shaded materials with procedural detail, inked outlines,
-skeleton drawing, camera and screenshots."""
+"""OpenGL rendering: cel-shaded materials with procedural detail, cast shadows, inked
+outlines, skeleton drawing, level-of-detail for hair, camera and screenshots."""
 import math
 
 import numpy as np
@@ -11,22 +11,69 @@ from OpenGL.GLU import gluPerspective
 KINDS = {"plain": 0.0, "skin": 1.0, "hair": 2.0, "cloth": 3.0, "denim": 4.0, "eye": 5.0,
          "glossy": 6.0}
 FOV = 35.0
+KEY_LIGHT = np.array([-0.4, 0.7, 1.0])          # eye space: the key light travels with the camera
+SHADOW_SIZE = 2048
+SHADOW_STRAND_LOD = 0.35          # fraction of hair strands that cast shadows
+
+# Vertex offsets shared by the main, outline and shadow passes so they always agree:
+# strands thicken when fewer are drawn, sway with the head, and the jaw drops when talking.
+DISPLACE = """
+uniform float uStrandScale;
+uniform vec3 uSwing;          // hair sway (side, unused, fore-aft)
+uniform float uSwingScale;
+uniform float uJaw;           // how far the lower face drops (world units), face meshes only
+vec4 displaced(vec4 v) {
+    vec2 aux = gl_MultiTexCoord1.xy;   // strands: (radius, distance along the strand 0..1)
+    v.xyz += gl_Normal * (aux.x * (uStrandScale - 1.0));
+    v.xyz += vec3(uSwing.x, -abs(uSwing.x) * 0.25, uSwing.z) * (aux.y * aux.y * uSwingScale);
+    float jaw = smoothstep(-0.33, -0.46, v.y) * smoothstep(-0.15, 0.2, v.z);
+    v.y -= uJaw * jaw;
+    v.z -= uJaw * jaw * 0.25;
+    return v;
+}
+"""
 
 VERTEX = """
 #version 120
+uniform mat4 uLightVP;
+uniform mat4 uInvView;
+""" + DISPLACE + """
 centroid varying vec3 vN;
 centroid varying vec3 vP;
 centroid varying vec3 vObj;
 centroid varying vec3 vT;
 centroid varying vec4 vColor;
+varying vec4 vLight;
 void main() {
-    vec4 ep = gl_ModelViewMatrix * gl_Vertex;
+    vec4 pos = displaced(gl_Vertex);
+    vec4 ep = gl_ModelViewMatrix * pos;
+    vLight = uLightVP * (uInvView * ep);       // this point as seen from the key light
     vP = ep.xyz;
     vN = gl_NormalMatrix * gl_Normal;
     vT = gl_NormalMatrix * gl_MultiTexCoord0.xyz;   // strand direction (0,1,0 for other meshes)
     vObj = gl_Vertex.xyz;
     vColor = gl_Color;
     gl_Position = gl_ProjectionMatrix * ep;
+}
+"""
+
+SHADOW_LOOKUP = """
+uniform sampler2D uShadow;
+uniform float uShadowOn;
+uniform float uShadowTexel;
+varying vec4 vLight;
+float shadowAmount(float ndl, float biasScale) {
+    vec3 p = vLight.xyz / vLight.w * 0.5 + 0.5;
+    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+    float bias = (0.0007 + 0.0032 * (1.0 - clamp(ndl, 0.0, 1.0))) * biasScale;
+    float lit = 0.0;
+    for (int i = -1; i <= 1; i++) {
+        for (int j = -1; j <= 1; j++) {
+            float d = texture2D(uShadow, p.xy + vec2(float(i), float(j)) * uShadowTexel).r;
+            lit += (p.z - bias > d) ? 0.0 : 1.0;
+        }
+    }
+    return lit / 9.0;
 }
 """
 
@@ -45,6 +92,7 @@ uniform float uPattern;
 uniform float uFreckle;
 uniform vec3 uCenter;
 uniform float uStrand;
+""" + SHADOW_LOOKUP + """
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -104,6 +152,11 @@ void main() {
         if (kind > 3.5) {
             base *= 0.95 + 0.10 * vnoise(vec2((vObj.x + vObj.z) * 70.0, vObj.y * 30.0));
         }
+        // soft fabric folds: bend the normal along slowly wandering horizontal creases
+        float fold = sin(vObj.y * 34.0 + 2.6 * sin(vObj.x * 9.0 + vObj.z * 7.0))
+                   + 0.5 * sin(vObj.y * 71.0 + 5.0 * vnoise(vObj.xz * 6.0));
+        N = normalize(N + normalize(vT) * fold * 0.028);
+        base *= 1.0 - 0.035 * max(-fold, 0.0);
         if (uPattern > 0.5) {
             float th = atan(vObj.x, vObj.z);
             float pat = 0.0;
@@ -132,15 +185,17 @@ void main() {
     vec3 L1 = normalize(gl_LightSource[1].position.xyz);
     vec3 L2 = normalize(gl_LightSource[2].position.xyz);
     float ndl = dot(N, L0);
-    float lit = smoothstep(-0.15, 0.35, ndl);
-    float hi = smoothstep(0.25, 0.95, ndl);
+    // cast shadows from the key light; thin strands need a bigger bias or they shadow themselves
+    float sh = uShadowOn > 0.5 ? shadowAmount(ndl, uStrand > 0.5 ? 4.0 : 1.0) : 1.0;
+    float lit = smoothstep(-0.15, 0.35, ndl) * sh;
+    float hi = smoothstep(0.25, 0.95, ndl) * sh;
     vec3 shadowTint = isSkin ? vec3(0.80, 0.58, 0.60) : vec3(0.62, 0.60, 0.78);
     vec3 c = base * mix(shadowTint * 0.72, vec3(0.92), lit);
     c = mix(c, base * vec3(1.0, 0.97, 0.92) * 1.05, hi);
     c += base * vec3(0.32, 0.38, 0.50) * 0.22 * max(dot(N, L1), 0.0);
     c += base * mix(vec3(0.05, 0.04, 0.07), vec3(0.10, 0.11, 0.14), N.y * 0.5 + 0.5);
     if (isSkin) {
-        c += base * vec3(0.30, 0.06, 0.02) * smoothstep(0.35, 0.0, abs(ndl - 0.08)) * 0.5;
+        c += base * vec3(0.30, 0.06, 0.02) * smoothstep(0.35, 0.0, abs(ndl - 0.08)) * 0.5 * mix(0.4, 1.0, sh);
     }
     float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
     c += vec3(0.30, 0.36, 0.55) * rim * smoothstep(-0.3, 0.5, dot(N, L2)) * 0.5;
@@ -151,12 +206,12 @@ void main() {
         vec3 T = normalize(vT);
         float th = dot(T, H);
         float st = sqrt(max(1.0 - th * th, 0.0));
-        float kk = (pow(st, 60.0) * 0.6 + pow(st, 14.0) * 0.18) * smoothstep(0.0, 0.3, ndl);
+        float kk = (pow(st, 60.0) * 0.6 + pow(st, 14.0) * 0.18) * smoothstep(0.0, 0.3, ndl) * sh;
         c += mix(base, vec3(1.0), 0.55) * kk * 0.55;
     } else if (isGlossy || isEye) {
-        c += vec3(1.0) * smoothstep(0.55, 0.70, pow(nh, uShine * 0.5)) * spec * (isEye ? 0.8 : 1.4);
+        c += vec3(1.0) * smoothstep(0.55, 0.70, pow(nh, uShine * 0.5)) * spec * (isEye ? 0.8 : 1.4) * sh;
     } else {
-        c += vec3(1.0) * smoothstep(0.45, 0.55, pow(nh, uShine)) * spec * 1.6;
+        c += vec3(1.0) * smoothstep(0.45, 0.55, pow(nh, uShine)) * spec * 1.6 * sh;
     }
     gl_FragColor = vec4(c, vColor.a);
 }
@@ -166,8 +221,9 @@ OUTLINE_VERTEX = """
 #version 120
 uniform float uPx;
 uniform float uViewH;
+""" + DISPLACE + """
 void main() {
-    vec4 ep = gl_ModelViewMatrix * gl_Vertex;
+    vec4 ep = gl_ModelViewMatrix * displaced(gl_Vertex);
     vec3 n = normalize(gl_NormalMatrix * gl_Normal);
     float wpp = abs(ep.z) * 2.0 / (gl_ProjectionMatrix[1][1] * uViewH);
     ep.xyz += n * (uPx * wpp);
@@ -181,6 +237,81 @@ uniform vec3 uOutline;
 void main() { gl_FragColor = vec4(uOutline, 1.0); }
 """
 
+DEPTH_VERTEX = """
+#version 120
+""" + DISPLACE + """
+void main() { gl_Position = gl_ModelViewProjectionMatrix * displaced(gl_Vertex); }
+"""
+
+DEPTH_FRAGMENT = """
+#version 120
+void main() { gl_FragColor = vec4(1.0); }
+"""
+
+GROUND_VERTEX = """
+#version 120
+uniform mat4 uLightVP;
+uniform mat4 uInvView;
+varying vec4 vLight;
+varying vec3 vObj;
+void main() {
+    vec4 ep = gl_ModelViewMatrix * gl_Vertex;
+    vLight = uLightVP * (uInvView * ep);
+    vObj = gl_Vertex.xyz;
+    gl_Position = gl_ProjectionMatrix * ep;
+}
+"""
+
+GROUND_FRAGMENT = """
+#version 120
+varying vec3 vObj;
+""" + SHADOW_LOOKUP + """
+void main() {
+    float sh = uShadowOn > 0.5 ? shadowAmount(1.0, 1.0) : 1.0;
+    float fall = 1.0 - smoothstep(2.2, 6.0, length(vObj.xz));
+    gl_FragColor = vec4(0.05, 0.06, 0.12, (1.0 - sh) * 0.34 * fall);
+}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Matrices (column-vector convention, like OpenGL)
+# ---------------------------------------------------------------------------
+def translate(x, y, z):
+    m = np.eye(4)
+    m[:3, 3] = (x, y, z)
+    return m
+
+
+def rotate(deg, axis):
+    a, c, s = math.radians(deg), math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    m = np.eye(4)
+    if axis == "x":
+        m[1:3, 1:3] = [[c, -s], [s, c]]
+    else:
+        m[0, 0], m[0, 2], m[2, 0], m[2, 2] = c, s, -s, c
+    return m
+
+
+def look_at(eye, center, up):
+    f = center - eye
+    f /= np.linalg.norm(f)
+    s = np.cross(f, up)
+    s /= np.linalg.norm(s)
+    u = np.cross(s, f)
+    m = np.eye(4)
+    m[0, :3], m[1, :3], m[2, :3] = s, u, -f
+    m[:3, 3] = -m[:3, :3] @ eye
+    return m
+
+
+def ortho(half, near, far):
+    m = np.eye(4)
+    m[0, 0] = m[1, 1] = 1.0 / half
+    m[2, 2] = -2.0 / (far - near)
+    m[2, 3] = -(far + near) / (far - near)
+    return m
+
 
 class Camera:
     def __init__(self, view="bust"):
@@ -188,6 +319,7 @@ class Camera:
         self.zoom_mul = 1.0
         self.ty, self.dist = self.target(view, -7.3)
         self.yaw, self.pitch = 20.0, 4.0
+        self.tx = 0.0                 # sideways look-at offset (used for close-ups)
 
     @staticmethod
     def target(view, ground_y):
@@ -195,6 +327,8 @@ class Camera:
             return -0.02, 3.3
         if view == "bust":
             return -0.8, 6.5
+        if view == "hands":            # for checking hand shapes (not in the V cycle)
+            return -3.9, 4.6
         span = (1.45 - ground_y) * 1.08
         return (1.45 + ground_y) / 2, span / (2 * math.tan(math.radians(FOV / 2)))
 
@@ -209,23 +343,68 @@ class Camera:
     def zoom(self, steps):
         self.zoom_mul = max(0.25, min(3.0, self.zoom_mul * 0.9 ** steps))
 
+    def matrix(self):
+        """World -> eye transform (the same one draw_scene loads into OpenGL)."""
+        return (translate(0, 0, -self.dist) @ rotate(self.pitch, "x") @ rotate(self.yaw, "y")
+                @ translate(-self.tx, -self.ty, 0))
+
+
+class ShadowMap:
+    """Depth-only framebuffer the key light renders into."""
+
+    def __init__(self, size=SHADOW_SIZE):
+        self.size, self.ok = size, False
+        try:
+            self.tex = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, self.tex)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, size, size, 0, GL_DEPTH_COMPONENT,
+                         GL_FLOAT, None)
+            for name, val in ((GL_TEXTURE_MIN_FILTER, GL_NEAREST), (GL_TEXTURE_MAG_FILTER, GL_NEAREST),
+                              (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
+                glTexParameteri(GL_TEXTURE_2D, name, val)
+            self.fbo = glGenFramebuffers(1)
+            glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, self.tex, 0)
+            glDrawBuffer(GL_NONE)
+            glReadBuffer(GL_NONE)
+            self.ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+            glDrawBuffer(GL_BACK)
+            glReadBuffer(GL_BACK)
+        except Exception:                      # very old drivers: run without shadows
+            self.ok = False
+            try:
+                glBindFramebuffer(GL_FRAMEBUFFER, 0)
+            except Exception:
+                pass
+
 
 class Renderer:
     """Owns the shader programs and draws a rig for a given pose and time."""
 
     def __init__(self):
-        self.prog = shaders.compileProgram(
-            shaders.compileShader(VERTEX, GL_VERTEX_SHADER),
-            shaders.compileShader(FRAGMENT, GL_FRAGMENT_SHADER), validate=False)
-        self.oprog = shaders.compileProgram(
-            shaders.compileShader(OUTLINE_VERTEX, GL_VERTEX_SHADER),
-            shaders.compileShader(OUTLINE_FRAGMENT, GL_FRAGMENT_SHADER), validate=False)
-        self.u = {n: glGetUniformLocation(self.prog, n) for n in
-                  ("uKind", "uSpec", "uShine", "uColor2", "uPattern", "uFreckle", "uCenter", "uStrand")}
-        self.ou = {n: glGetUniformLocation(self.oprog, n) for n in ("uPx", "uViewH", "uOutline")}
-        self.blink = 0.0
-        self.gaze = (0.0, 0.0)
+        compile_ = shaders.compileShader
+
+        def program(vs, fs):
+            return shaders.compileProgram(compile_(vs, GL_VERTEX_SHADER), compile_(fs, GL_FRAGMENT_SHADER),
+                                          validate=False)
+
+        self.prog, self.oprog = program(VERTEX, FRAGMENT), program(OUTLINE_VERTEX, OUTLINE_FRAGMENT)
+        self.dprog, self.gprog = program(DEPTH_VERTEX, DEPTH_FRAGMENT), program(GROUND_VERTEX, GROUND_FRAGMENT)
+        disp = ("uStrandScale", "uSwing", "uSwingScale", "uJaw")
+        loc = lambda p, names: {n: glGetUniformLocation(p, n) for n in names}
+        self.u = loc(self.prog, ("uKind", "uSpec", "uShine", "uColor2", "uPattern", "uFreckle", "uCenter",
+                                 "uStrand", "uLightVP", "uInvView", "uShadow", "uShadowOn", "uShadowTexel") + disp)
+        self.ou = loc(self.oprog, ("uPx", "uViewH", "uOutline") + disp)
+        self.du = loc(self.dprog, disp)
+        self.gu = loc(self.gprog, ("uLightVP", "uInvView", "uShadow", "uShadowOn", "uShadowTexel"))
+        self.blink, self.gaze, self.lid, self.jaw = 0.0, (0.0, 0.0), 0.0, 0.0
+        self.swing = (0.0, 0.0, 0.0)
+        self.lod, self.strand_scale = 1.0, 1.0
+        self.light_vp = np.eye(4)
+        self.inv_view = np.eye(4)
         self.view_h = 720.0
+        self.shadow = ShadowMap()
         glEnable(GL_MULTISAMPLE)
         glEnable(GL_DEPTH_TEST)
         glDisable(GL_LIGHTING)
@@ -238,19 +417,30 @@ class Renderer:
         # Lights are stored in eye space (set with an identity modelview): key, fill, rim.
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
-        glLightfv(GL_LIGHT0, GL_POSITION, (-0.4, 0.7, 1.0, 0.0))
+        glLightfv(GL_LIGHT0, GL_POSITION, (*KEY_LIGHT, 0.0))
         glLightfv(GL_LIGHT1, GL_POSITION, (0.8, 0.1, 0.6, 0.0))
         glLightfv(GL_LIGHT2, GL_POSITION, (0.2, 0.5, -1.0, 0.0))
 
     # ---- scene ---------------------------------------------------------------
     def draw_scene(self, rig, pose, cam, bg, size, blink=0.0, transparent=False, reserved=0,
-                   gaze=(0.0, 0.0)):
+                   gaze=(0.0, 0.0), lid=0.0, jaw=0.0, swing=(0.0, 0.0, 0.0), shadows=True):
         """Draw into the whole window; `reserved` px on the right (the UI card) are kept free by
-        shifting the lens, so the avatar stays centred in the remaining area."""
+        shifting the lens, so the avatar stays centred in the remaining area.
+
+        gaze (pitch, yaw) turns the eyes; lid closes the lids extra (expressions); jaw is how far the
+        lower face drops (talking); swing is the hair sway; shadows toggles the cast shadows.
+        """
         w, h = size
         self.view_h = float(h)
-        self.blink = blink
-        self.gaze = gaze                 # (pitch, yaw) degrees for the eyeballs
+        self.blink, self.gaze, self.lid, self.jaw, self.swing = blink, gaze, lid, jaw, swing
+        # Fewer strands at a distance (drawn thicker) keeps long hair light on the GPU.
+        self.lod = float(np.interp(cam.dist, [3.3, 6.5, 10.0, 15.0], [1.0, 0.85, 0.65, 0.5]))
+        self.strand_scale = 1.0 / math.sqrt(self.lod)
+        view = cam.matrix()
+        self.inv_view = np.linalg.inv(view)
+        use_shadow = bool(shadows and self.shadow.ok)
+        if use_shadow:
+            self._shadow_pass(rig, pose, view, cam)
         glViewport(0, 0, w, h)
         glClearColor(0, 0, 0, 0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -263,13 +453,47 @@ class Renderer:
         gluPerspective(FOV, w / max(h, 1), 0.5, 80)
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
-        glTranslatef(0, 0, -cam.dist)
-        glRotatef(cam.pitch, 1, 0, 0)
-        glRotatef(cam.yaw, 0, 1, 0)
-        glTranslatef(0, -cam.ty, 0)
-        self._shadow(rig.ground_y)
+        glLoadMatrixf(view.T.astype(np.float32))
+        if use_shadow:
+            glActiveTexture(GL_TEXTURE1)
+            glBindTexture(GL_TEXTURE_2D, self.shadow.tex)
+            glActiveTexture(GL_TEXTURE0)
+        self._ground(rig.ground_y, use_shadow)
         self._outline_pass(rig, pose)
-        self._main_pass(rig, pose)
+        self._main_pass(rig, pose, use_shadow)
+
+    def _light_matrices(self, view, rig):
+        """Orthographic key-light camera framing the avatar (the light is fixed to the camera)."""
+        to_world = view[:3, :3].T
+        direction = to_world @ (KEY_LIGHT / np.linalg.norm(KEY_LIGHT))
+        top = 0.9
+        center = np.array([0.0, (top + rig.ground_y) / 2, 0.0])
+        radius = (top - rig.ground_y) / 2 + 1.6
+        up = np.array([0.0, 1.0, 0.0]) if abs(direction[1]) < 0.95 else np.array([0.0, 0.0, 1.0])
+        eye = center + direction * radius * 2
+        return look_at(eye, center, up), ortho(radius, radius * 0.4, radius * 3.6)
+
+    def _shadow_pass(self, rig, pose, view, cam):
+        light_view, light_proj = self._light_matrices(view, rig)
+        self.light_vp = light_proj @ light_view
+        glBindFramebuffer(GL_FRAMEBUFFER, self.shadow.fbo)
+        glViewport(0, 0, self.shadow.size, self.shadow.size)
+        glClear(GL_DEPTH_BUFFER_BIT)
+        glMatrixMode(GL_PROJECTION)
+        glLoadMatrixf(light_proj.T.astype(np.float32))
+        glMatrixMode(GL_MODELVIEW)
+        glLoadMatrixf(light_view.T.astype(np.float32))
+        glUseProgram(self.dprog)
+        self._set_displacement(self.du)
+        self._walk(rig.root, pose, self._draw_depth)
+        glUseProgram(0)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+    def _set_displacement(self, u, jaw=None):
+        glUniform1f(u["uStrandScale"], self.strand_scale)
+        glUniform3f(u["uSwing"], *self.swing)
+        glUniform1f(u["uSwingScale"], 0.0)
+        glUniform1f(u["uJaw"], 0.0)
 
     def _background(self, top, bottom):
         glUseProgram(0)
@@ -285,18 +509,31 @@ class Renderer:
         glEnd()
         glEnable(GL_DEPTH_TEST)
 
-    @staticmethod
-    def _shadow(ground_y):
+    def _ground(self, ground_y, use_shadow):
+        """A soft contact blob plus (with shadows on) the avatar's real cast shadow."""
         glUseProgram(0)
         glDepthMask(GL_FALSE)
         glBegin(GL_TRIANGLE_FAN)
-        glColor4f(0, 0, 0, 0.28)
+        glColor4f(0, 0, 0, 0.20 if use_shadow else 0.28)
         glVertex3f(0, ground_y, 0.05)
         glColor4f(0, 0, 0, 0.0)
         for k in range(33):
             a = 2 * math.pi * k / 32
             glVertex3f(2.1 * math.cos(a), ground_y, 0.05 + 1.3 * math.sin(a))
         glEnd()
+        if use_shadow:
+            glUseProgram(self.gprog)
+            g = self.gu
+            glUniformMatrix4fv(g["uLightVP"], 1, GL_TRUE, self.light_vp.astype(np.float32))
+            glUniformMatrix4fv(g["uInvView"], 1, GL_TRUE, self.inv_view.astype(np.float32))
+            glUniform1i(g["uShadow"], 1)
+            glUniform1f(g["uShadowOn"], 1.0)
+            glUniform1f(g["uShadowTexel"], 1.0 / self.shadow.size)
+            glBegin(GL_QUADS)
+            for x, z in ((-7, -7), (7, -7), (7, 7), (-7, 7)):
+                glVertex3f(x, ground_y + 0.002, z)
+            glEnd()
+            glUseProgram(0)
         glDepthMask(GL_TRUE)
 
     @staticmethod
@@ -311,13 +548,21 @@ class Renderer:
     def _outline_pass(self, rig, pose):
         glUseProgram(self.oprog)
         glUniform1f(self.ou["uViewH"], self.view_h)
+        self._set_displacement(self.ou)
         glEnable(GL_CULL_FACE)
         glCullFace(GL_FRONT)
         self._walk(rig.root, pose, self._draw_outline)
         glDisable(GL_CULL_FACE)
 
-    def _main_pass(self, rig, pose):
+    def _main_pass(self, rig, pose, use_shadow):
         glUseProgram(self.prog)
+        u = self.u
+        glUniformMatrix4fv(u["uLightVP"], 1, GL_TRUE, self.light_vp.astype(np.float32))
+        glUniformMatrix4fv(u["uInvView"], 1, GL_TRUE, self.inv_view.astype(np.float32))
+        glUniform1i(u["uShadow"], 1)
+        glUniform1f(u["uShadowOn"], 1.0 if use_shadow else 0.0)
+        glUniform1f(u["uShadowTexel"], 1.0 / self.shadow.size)
+        self._set_displacement(u)
         self._walk(rig.root, pose, self._draw_mesh)
         glUseProgram(0)
 
@@ -339,7 +584,7 @@ class Renderer:
                 glPushMatrix()
                 glTranslatef(px, py, pz)
                 if kind == "blink":
-                    glRotatef(self.blink, 1, 0, 0)
+                    glRotatef(self.blink + self.lid, 1, 0, 0)
                 else:                     # "gaze": turn the eyeball; the iris follows on the sphere
                     glRotatef(self.gaze[1], 0, 1, 0)
                     glRotatef(self.gaze[0], 1, 0, 0)
@@ -352,17 +597,56 @@ class Renderer:
             self._walk(child, pose, draw)
         glPopMatrix()
 
+    # ---- drawing one mesh --------------------------------------------------------------
+    def _count(self, m, lod=None):
+        """Index count to draw: hair strands are thinned out with distance."""
+        lod = self.lod if lod is None else lod
+        if m.strand and m.n_strands and lod < 1.0:
+            return max(1, int(m.n_strands * lod)) * m.faces_per_strand * 3
+        return len(m.f)
+
+    def _mesh_displacement(self, u, m):
+        glUniform1f(u["uSwingScale"], m.swing if m.strand else 0.0)
+        glUniform1f(u["uJaw"], self.jaw if m.jaw_follow else 0.0)
+        glUniform1f(u["uStrandScale"], self.strand_scale if m.strand else 1.0)
+
     def _arrays(self, m):
         glVertexPointer(3, GL_FLOAT, 0, m.v)
         glNormalPointer(GL_FLOAT, 0, m.n)
+        if m.strand_aux is not None:
+            glClientActiveTexture(GL_TEXTURE1)
+            glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+            glTexCoordPointer(2, GL_FLOAT, 0, m.strand_aux)
+            glClientActiveTexture(GL_TEXTURE0)
+        else:
+            glMultiTexCoord2f(GL_TEXTURE1, 0.0, 0.0)
+
+    @staticmethod
+    def _release(m):
+        if m.strand_aux is not None:
+            glClientActiveTexture(GL_TEXTURE1)
+            glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+            glClientActiveTexture(GL_TEXTURE0)
+
+    def _draw_depth(self, m):
+        # shadows are soft, so the shadow pass draws far fewer (thicker) strands than the picture
+        lod = min(self.lod, SHADOW_STRAND_LOD)
+        self._mesh_displacement(self.du, m)
+        if m.strand:
+            glUniform1f(self.du["uStrandScale"], 1.0 / math.sqrt(lod))
+        self._arrays(m)
+        glDrawElements(GL_TRIANGLES, self._count(m, lod), GL_UNSIGNED_INT, m.f)
+        self._release(m)
 
     def _draw_outline(self, m):
         if not m.outline:
             return
         glUniform1f(self.ou["uPx"], 1.0 if m.thin else 2.2)
         glUniform3f(self.ou["uOutline"], *(c * 0.30 for c in m.color))
+        self._mesh_displacement(self.ou, m)
         self._arrays(m)
-        glDrawElements(GL_TRIANGLES, len(m.f), GL_UNSIGNED_INT, m.f)
+        glDrawElements(GL_TRIANGLES, self._count(m), GL_UNSIGNED_INT, m.f)
+        self._release(m)
 
     def _draw_mesh(self, m):
         u = self.u
@@ -374,6 +658,7 @@ class Renderer:
         glUniform1f(u["uFreckle"], m.freckle)
         glUniform3f(u["uCenter"], *m.center)
         glUniform1f(u["uStrand"], 1.0 if m.strand else 0.0)
+        self._mesh_displacement(u, m)
         self._arrays(m)
         if m.tangents is not None:
             glEnableClientState(GL_TEXTURE_COORD_ARRAY)
@@ -385,11 +670,12 @@ class Renderer:
             glColorPointer(m.colors.shape[1], GL_FLOAT, 0, m.colors)
         else:
             glColor3f(*m.color)
-        glDrawElements(GL_TRIANGLES, len(m.f), GL_UNSIGNED_INT, m.f)
+        glDrawElements(GL_TRIANGLES, self._count(m), GL_UNSIGNED_INT, m.f)
         if m.colors is not None:
             glDisableClientState(GL_COLOR_ARRAY)
         if m.tangents is not None:
             glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+        self._release(m)
 
     # ---- capture ---------------------------------------------------------------------
     @staticmethod

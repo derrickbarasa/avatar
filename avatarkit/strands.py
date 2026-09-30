@@ -182,7 +182,12 @@ def strand_mesh(paths, base_color, radius, rng, locks, flyaway=0.02, part="hair"
     mesh = Mesh(verts, faces, base_color, ref=refs, colors=colors, shine=40, spec=0.25,
                 kind="hair")
     mesh.tangents = np.ascontiguousarray(tangents, np.float32)
+    # (radius, position along the strand): lets the shader thicken strands at lower detail and sway them
+    mesh.strand_aux = np.ascontiguousarray(np.stack([np.repeat(radii.reshape(-1), SIDES),
+                                                     np.repeat(np.broadcast_to(t, (n, s1)).reshape(-1), SIDES)], 1),
+                                           np.float32)
     mesh.strand = True
+    mesh.n_strands, mesh.faces_per_strand = n, len(base_faces)   # faces are stored strand by strand
     mesh.part = part          # "hair", "facial" or "brows"
     return mesh
 
@@ -318,6 +323,70 @@ def _group_ponytail(head, margin, rng, steps):
     return pts, make_locks(root), 0.011
 
 
+def _bundle_paths(root, steps, tie, curve_pts, offsets, side=None, seg=0.28):
+    """Strands that run from their roots to a tie point, then follow a guide curve in a bundle.
+
+    `offsets(u, n)` returns the (n, 3) cross-section offset of each strand at curve position u.
+    """
+    n = len(root)
+    curve = catmull(curve_pts, 100)
+    grid = np.linspace(0, 1, len(curve))
+    pts = np.empty((n, steps + 1, 3))
+    sign = np.ones(n) if side is None else side
+    u_end = 0.86 + 0.14 * np.random.default_rng(7).random(n)
+    for i in range(steps + 1):
+        t = i / steps
+        if t < seg:
+            a = _smooth_pick(t / seg)
+            target = tie * np.stack([sign, np.ones(n), np.ones(n)], 1) + offsets(0.0, n) * 0.5
+            pts[:, i] = root * (1 - a) + target * a
+        else:
+            u = (t - seg) / (1 - seg) * u_end
+            c = np.stack([np.interp(u, grid, curve[:, k]) for k in range(3)], 1)
+            c[:, 0] *= sign
+            pts[:, i] = c + offsets(u, n)
+        pts[:, i] = collide(pts[:, i])
+    return pts
+
+
+def _group_pigtails(head, margin, rng, steps):
+    root, _ = sample_roots(head, margin, 2600, rng)
+    n = len(root)
+    side = np.where(root[:, 0] >= 0, 1.0, -1.0)
+    off = rng.normal(size=(n, 2)) * 0.028
+    prof = lambda u: (0.9 - 0.45 * u + 0.3 * np.sin(math.pi * u))[:, None] if np.ndim(u) else (0.9 - 0.45 * u + 0.3 * math.sin(math.pi * u))
+
+    def offsets(u, count):
+        p = prof(np.full(count, u)) if np.ndim(u) == 0 else prof(u)
+        return np.stack([off[:, 0], np.zeros(count), off[:, 1]], 1) * p * 1.9
+
+    paths = _bundle_paths(root, steps, np.array([0.44, 0.10, -0.28]),
+                          [(0.44, 0.10, -0.28), (0.60, -0.05, -0.32), (0.66, -0.55, -0.28), (0.64, -1.05, -0.20)],
+                          offsets, side)
+    return paths, make_locks(root), 0.010
+
+
+def _group_braid(head, margin, rng, steps):
+    root, _ = sample_roots(head, margin, 2600, rng)
+    n = len(root)
+    strand = rng.integers(0, 3, n)                       # three sub-strands woven around each other
+    phase = strand * 2 * math.pi / 3
+    scatter = rng.normal(size=(n, 2)) * 0.011
+    turns = 7.0
+
+    def offsets(u, count):
+        u = np.full(count, u) if np.ndim(u) == 0 else u
+        ang = phase + 2 * math.pi * turns * u
+        radius = 0.052 * (1.0 - 0.45 * u)
+        return np.stack([np.cos(ang) * radius + scatter[:, 0], np.zeros(count),
+                         np.sin(ang) * radius * 0.8 + scatter[:, 1]], 1)
+
+    paths = _bundle_paths(root, steps, np.array([0.0, 0.26, -0.52]),
+                          [(0.0, 0.26, -0.52), (0.0, 0.05, -0.74), (0.0, -0.60, -0.76), (0.0, -1.25, -0.70)],
+                          offsets)
+    return paths, make_locks(root), 0.0095
+
+
 def _group_bun(head, margin, rng, steps):
     root, _ = sample_roots(head, margin, 2600, rng)
     n = len(root)
@@ -344,6 +413,10 @@ def _group_bun(head, margin, rng, steps):
                 [np.sin(th) * np.cos(ph), np.cos(th) * np.ones(n), np.sin(th) * np.sin(ph)], 1)
         pts[:, i] = collide(pts[:, i])
     return pts, make_locks(root), 0.010
+
+
+SWING = {"pigtails": 1.0, "braid": 0.9, "long": 1.0, "bob": 0.8, "bangs": 0.8, "ponytail": 1.0, "curly": 0.3, "afro": 0.15,
+         "short": 0.25, "quiff": 0.2, "mohawk": 0.15, "bun": 0.05}
 
 
 def strand_meshes(head, style, color, margin):
@@ -375,13 +448,19 @@ def strand_meshes(head, style, color, margin):
         groups = [_group_mohawk(head, margin, rng, 10)]
     elif style == "afro":
         groups = [_group_afro(head, margin, rng, 16)]
+    elif style == "pigtails":
+        groups = [_group_pigtails(head, margin, rng, 18)]
+    elif style == "braid":
+        groups = [_group_braid(head, margin, rng, 34)]
     if not groups:
         return []
     paths = np.concatenate([g[0] for g in groups])
     offsets = np.cumsum([0] + [len(g[1][0]) for g in groups[:-1]])
     inv = np.concatenate([g[1][1] + o for g, o in zip(groups, offsets)])
     radius = float(np.mean([g[2] for g in groups]))
-    return [strand_mesh(paths, color, radius, rng, (np.arange(inv.max() + 1), inv))]
+    mesh = strand_mesh(paths, color, radius, rng, (np.arange(inv.max() + 1), inv))
+    mesh.swing = SWING.get(style, 0.3)
+    return [mesh]
 
 
 # ---------------------------------------------------------------------------
@@ -478,27 +557,27 @@ def brow_curve(t, side, dy, tilt):
 
 
 def brow_strand_meshes(head, thickness, color, dy=0.0, tilt=0.0):
-    """Both eyebrows as short hairs lying along the brow, thicker at the inner end."""
-    rng = np.random.default_rng(zlib.crc32(b"brows"))
+    """Eyebrow hairs, one mesh per side ([right, left]), lying along the brow, thicker at the inner end."""
     skin = Skin(head, (head.Z > 0.0) & (np.abs(head.Y - 0.18) < 0.3))
-    roots, dirs, sides = [], [], []
-    per = int(240 * thickness)
+    out = []
     for side in (-1, 1):
+        rng = np.random.default_rng(zlib.crc32(b"brows") + side)
+        per = int(240 * thickness)
         t = rng.random(per)
         x, y, dx, dyd = brow_curve(t, side, dy, tilt)
         width = 0.016 * thickness * (1.1 - 0.65 * t)
         y = y + rng.uniform(-1, 1, per) * width * 0.9
-        z = np.array([head.z_at(a, b) for a, b in zip(x, y)])
-        roots.append(np.stack([x, y, z], 1))
-        # hairs lean outward and, near the inner end, upward
-        d = np.stack([dx, dyd + 0.15 * (1 - t) * 0.2, np.zeros(per)], 1)
-        dirs.append(unit(d + 1e-9))
-    root, d0 = np.concatenate(roots), np.concatenate(dirs)
-    nrm = skin.normals(root)
-    d0 = _tangent(d0 + rng.normal(size=d0.shape) * 0.12, nrm)
-    locks = make_locks(root, 40)
-    length = 0.045 * (0.75 + 0.5 * rng.random(len(root)))
-    paths = grow(root, nrm, d0, length, 4, rng, locks, gravity=0.05, jitter=0.1, floor=0.0,
-                 collider=lambda p: skin.push(p, 0.004))
-    return [strand_mesh(paths, color, 0.0034, rng, (np.arange(len(root)), np.arange(len(root))),
-                        flyaway=0.0, part="brows")]
+        z = head.z_at_many(x, y)
+        root = np.stack([x, y, z], 1)
+        d0 = unit(np.stack([dx, dyd + 0.03 * (1 - t), np.zeros(per)], 1) + 1e-9)
+        nrm = skin.normals(root)
+        d0 = _tangent(d0 + rng.normal(size=d0.shape) * 0.12, nrm)
+        locks = make_locks(root, 40)
+        length = 0.045 * (0.75 + 0.5 * rng.random(per))
+        paths = grow(root, nrm, d0, length, 4, rng, locks, gravity=0.05, jitter=0.1, floor=0.0,
+                     collider=lambda p: skin.push(p, 0.004))
+        mesh = strand_mesh(paths, color, 0.0034, rng, (np.arange(per), np.arange(per)),
+                           flyaway=0.0, part="brows")
+        mesh.side = side
+        out.append(mesh)
+    return out

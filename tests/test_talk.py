@@ -257,6 +257,66 @@ class TTSTests(unittest.TestCase):
             O.set_choices("voice", [n for n, _ in before])
 
 
+class NewContentTests(unittest.TestCase):
+    def head_meshes(self, **changes):
+        return default_rig(**changes)["head"].meshes
+
+    def test_pigtails_and_braid_are_strand_hair(self):
+        for style, minimum in (("Pigtails", 20000), ("Braid", 20000)):
+            strands = [m for m in self.head_meshes(hair=style) if m.strand and m.part == "hair"]
+            self.assertEqual(len(strands), 1, style)
+            self.assertGreater(len(strands[0].v), minimum, style)
+            self.assertEqual(strands[0].strand_aux.shape, (len(strands[0].v), 2))
+
+    def test_pigtails_hang_on_both_sides_and_braid_down_the_back(self):
+        v = [m for m in self.head_meshes(hair="Pigtails") if m.strand and m.part == "hair"][0].v
+        low = v[v[:, 1] < -0.5]
+        self.assertGreater((low[:, 0] > 0.3).sum(), 500)
+        self.assertGreater((low[:, 0] < -0.3).sum(), 500)
+        b = [m for m in self.head_meshes(hair="Braid") if m.strand and m.part == "hair"][0].v
+        lowb = b[b[:, 1] < -0.6]
+        self.assertGreater(len(lowb), 500)
+        self.assertLess(np.abs(lowb[:, 0]).max(), 0.25)        # a narrow braid
+        self.assertLess(lowb[:, 2].mean(), -0.5)                # behind the head
+
+    def test_new_hats_headphones_and_glasses_build(self):
+        n0 = len(self.head_meshes())
+        for kw in ({"hat": "Bucket"}, {"hat": "Top hat"}, {"headphones": "Headphones"},
+                   {"glasses": "Cat-eye"}, {"glasses": "Aviator"}):
+            self.assertGreater(len(self.head_meshes(**kw)), n0, kw)
+
+    def test_top_hat_is_taller_than_the_head(self):
+        tall = max(m.v[:, 1].max() for m in self.head_meshes(hat="Top hat", hair="Bald"))
+        self.assertGreater(tall, 0.9)
+
+    def test_dress_replaces_the_trousers_with_a_skirt_in_the_top_colour(self):
+        rig = default_rig(top="Dress", topcolor="Purple", pants="Jeans")
+        self.assertFalse(rig["thighL"].meshes[2:] and any(m.kind == "denim" for m in rig["thighL"].meshes))
+        skirt = [m for m in rig["root"].meshes if m.kind == "cloth" and m.v[:, 1].min() < -4.5]
+        self.assertTrue(skirt)
+        self.assertEqual(skirt[0].color, tuple(O.CLOTH_COLORS[8][1]))
+        low = min(m.v[:, 1].min() for m in rig["root"].meshes if m.kind == "cloth")
+        self.assertLess(low, -5.0)                               # reaches below the knee
+
+    def test_neckwear_adds_pieces_to_the_torso(self):
+        base = len(default_rig()["torso"].meshes)
+        self.assertGreater(len(default_rig(neckwear="Bow tie")["torso"].meshes), base)
+        self.assertGreater(len(default_rig(neckwear="Tie")["torso"].meshes), base)
+
+    def test_older_share_codes_still_open_with_defaults_for_new_options(self):
+        st = dict(O.DEFAULT_STATE)
+        O.set_by_name(st, "hair", "Afro")
+        code = O.encode_state(st)
+        legacy = code[:O.CODE_PREFIX.__len__() + O.LEGACY_CODE_LEN]
+        out = dict(O.DEFAULT_STATE)
+        out["neckwear"] = 2
+        O.decode_state(legacy, out)
+        self.assertEqual(O.resolve(out)["hair"], "afro")
+        self.assertEqual(O.resolve(out)["neckwear"], "none")
+        with self.assertRaises(ValueError):
+            O.decode_state(code[:-4], out)                      # shorter than any code ever issued
+
+
 class TalkTabTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -275,11 +335,11 @@ class TalkTabTests(unittest.TestCase):
     def test_talk_controls_exist_and_are_inside_the_card(self):
         ui = self.render(say_text="Hello there")
         actions = {a for _, a in ui.widgets}
-        for a in (("textbox",), ("say", "speak"), ("say", "random")):
+        for a in (("textbox", "say"), ("say", "speak"), ("say", "random")):
             self.assertIn(a, actions)
         self.assertTrue({("phrase", i) for i in range(6)} <= actions)
         for rect, action in ui.widgets:
-            if action[0] in ("textbox", "say", "phrase"):
+            if action[0] in ("textbox", "say", "phrase", "emote"):
                 self.assertTrue(ui.panel_rect.contains(rect), action)
 
     def test_button_label_tracks_state(self):
@@ -308,7 +368,7 @@ class TalkTabTests(unittest.TestCase):
 
     def test_focused_textbox_and_cursor_change_the_picture(self):
         a = bytes(self.render(say_text="Hi").surface.get_view("0"))
-        b = bytes(self.render(say_text="Hi", say_focus=True, cursor_on=True).surface.get_view("0"))
+        b = bytes(self.render(say_text="Hi", focus_field="say", cursor_on=True).surface.get_view("0"))
         self.assertNotEqual(a, b)
 
 

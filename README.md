@@ -33,9 +33,24 @@ pip install -r requirements.txt
 python avatar.py
 ```
 
-Optional (`requirements-optional.txt`): OpenCV 4 for face detection in the photo
-import (OpenCV 5 dropped the classifier it uses), and trimesh / scikit-image for
-extra tests.
+Or `pip install .` to get an `avatar-studio` command. Optional
+(`requirements-optional.txt`): OpenCV 4 for face detection in the photo import,
+`imageio-ffmpeg` for MP4 clips, and trimesh / scikit-image for extra tests.
+`python build_exe.py` makes a standalone app with PyInstaller.
+
+## Saving and your library
+
+Everything you make lives in one folder, `~/Documents/AvatarStudio` (override with
+`AVATARKIT_HOME`), with `avatars/`, `exports/` and `packs/` inside.
+
+- **Autosave:** your work is restored the next time you start (`last.avatar`).
+- **Library tab:** name the avatar, **Save** / **Save as**, and reopen or delete
+  from the gallery of thumbnails. **Open** picks any `.avatar` file; you can also
+  drag one (or a share code text file) onto the window.
+- **Undo / redo** (Ctrl+Z / Ctrl+Y) for every change.
+- **Share code:** a short `AV2-...` string that captures the whole avatar (C copies
+  it, Ctrl+V loads one).
+- `.avatar` files are plain JSON with a thumbnail, so they are easy to back up.
 
 ## Controls
 
@@ -43,32 +58,28 @@ extra tests.
 | --- | --- |
 | Click | pick a swatch or chip; click a tab; drag the scene to orbit |
 | Tab / Shift+Tab | switch panel tab |
-| ↑ / ↓ , ← / → | move the focus between options / change the focused option |
+| Arrows | move the focus between options / change the focused option |
 | Wheel | scroll the panel, or zoom when over the scene |
+| Ctrl+S / Ctrl+O | save to the library / open a file |
+| Ctrl+Z / Ctrl+Y | undo / redo |
 | H | show or hide the shortcut sheet |
-| T | open the Talk tab and start typing |
-| Enter | speak the text (again to stop); inside the text box it speaks and unfocuses |
+| T / Enter | open the Talk tab and type / speak the text (again to stop) |
 | Esc | stop speaking (then quit) |
 | R | randomize everything |
 | [ / ] | previous / next outfit preset |
-| V | cycle camera: bust / face / full body |
-| Drag / wheel | orbit / zoom |
+| V | cycle camera: bust / face / hands / full body |
 | Space | toggle auto-spin |
-| S / G | save PNG / save PNG with transparent background (to `exports/`) |
-| E / O | export GLB (rigged parts, current pose) / OBJ + MTL |
-| C / Ctrl+V | copy share code / load avatar from a code on the clipboard |
+| S / G | save PNG / transparent PNG |
+| E / O / B | export GLB / OBJ + MTL / full bundle (zip) |
+| C / Ctrl+V | copy share code / load from the clipboard |
 | P | pick a photo and set skin tone, hair colour and length, facial hair |
 | K / L | save / load `avatar.json` |
 
 ## Interface
 
-A floating card holds seven tabs (Face, Hair, Body, Outfit, Extras, Scene, Talk). Colour
-options are swatches, everything else is a row of chips; long tabs scroll. The
-share code and the Random / Photo / PNG / GLB buttons sit at the bottom of the
-card. A pill over the scene switches between bust, face and full-body views and
-toggles the turntable, and short toasts confirm saves and exports. The window
-can be resized; the 3D scene fills it and the avatar stays centred in the space
-left of the card.
+A floating card holds eight tabs (Face, Hair, Body, Outfit, Extras, Scene, Talk,
+Library). Colour options are swatches, everything else is a row of chips; long tabs
+scroll. Short toasts confirm saves and exports. The window can be resized.
 
 ## Command line
 
@@ -102,12 +113,41 @@ mimes the sentence, timed from the text alone.
 
 ## Exports
 
-- **GLB** keeps the skeleton as glTF nodes (head, arms, forearms, hands, legs...)
-  so you can repose or animate it in Blender, Unity, Godot, and similar tools.
-  Materials are plain colours; procedural extras (iris, freckles, cloth
-  patterns) are render-only.
+All exports go to `exports/` in the library folder (Library tab: *Show last export*).
+Long hair and beards are thinned on export to keep files a sensible size.
+
+- **GLB** keeps the skeleton as glTF nodes so you can repose it in Blender, Unity or Godot.
+- **Skinned GLB** has a real armature (bones, inverse bind matrices, joints and weights).
+- **VRM 1.0** is a humanoid with the standard bone map, in metres, feet on the ground.
+  Expressions/blend shapes are not included yet.
 - **OBJ + MTL** bakes the current pose into one static mesh per part.
-- **PNG** is the viewport only, optionally with a transparent background.
+- **Bundle** is a zip with every format, the `.avatar` file and a preview.
+- **PNG / transparent PNG** is the viewport.
+- **Clip (MP4 or GIF):** records the avatar speaking the current line, with the audio
+  track. MP4 needs ffmpeg (system-installed or `pip install imageio-ffmpeg`); without it
+  you get a GIF.
+
+The GLB/skinned/VRM files pass the Khronos glTF validator with no errors. Materials are
+plain colours; procedural extras (iris, freckles, cloth patterns) are render-only.
+
+## Content packs
+
+Drop a `.json` file into `packs/` to add hair, eye, cloth, pants and shoe colours,
+outfit presets, quick phrases and backgrounds. See `examples/packs/neon.json`. Broken
+packs are reported at startup and never stop the good ones loading.
+
+## More features
+
+- Nine emotes (wave, laugh, shrug...), emotion picked from the text being spoken.
+- Lip-sync rules for English, Spanish, Italian and Portuguese (other languages use the
+  English rules with accents removed).
+- Soft shadows, cloth folds, and hair that swings when the head moves (Scene tab).
+
+## Not done yet
+
+Neural/offline TTS, microphone input, BVH import, VRM expressions, landmark-based photo
+matching, a virtual webcam, ambient occlusion, and testing on macOS/Linux (only Windows
+has been tried).
 
 ## Photo import
 
@@ -131,7 +171,11 @@ avatarkit/
   builder.py         assembles an avatar from options
   render.py          GLSL cel shader, outline pass, camera, capture
   ui.py app.py       interface overlay (card, chips, toasts), input, command line
-  exporters.py       OBJ and GLB writers
+  exporters.py       OBJ, GLB, skinned GLB and VRM writers
+  store.py history.py   library folder, .avatar files, autosave, undo/redo
+  packs.py           content packs
+  physics.py         hair swing
+  recorder.py        MP4 / GIF clip recording
   photo.py           photo -> option suggestions
   speech.py tts.py   text -> mouth shapes and lip-sync timeline; system text-to-speech
 tests/               python -m unittest discover -s tests

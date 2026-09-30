@@ -56,6 +56,7 @@ class Head:
         self.faces = grid_faces(self.NU, self.NV)
         self.mesh = Mesh(self.P, self.faces, skin, ref=(0, 0, 0), colors=colors,
                          per_face=False, shine=15, spec=0.05, kind="skin")
+        self.mesh.jaw_follow = True          # the chin drops when the mouth opens
         front_mask = self.Z > 0.05
         self._fx, self._fy, self._fz = self.X[front_mask], self.Y[front_mask], self.Z[front_mask]
 
@@ -162,18 +163,19 @@ class Mouth:
         return (g[iy, ix] * (1 - tx) * (1 - ty) + g[iy, ix + 1] * tx * (1 - ty)
                 + g[iy + 1, ix] * (1 - tx) * ty + g[iy + 1, ix + 1] * tx * ty)
 
-    def meshes(self, open_=0.0, wide=0.0, press=0.0):
+    def meshes(self, open_=0.0, wide=0.0, press=0.0, smile=0.0):
+        """Lips for a mouth shape; `smile` is added to the resting smile (negative = frown)."""
         key = (int(round(min(max(open_, 0.0), 1.0) * 24)), int(round(min(max(wide, -1.0), 1.0) * 12)),
-               bool(press > 0.5))
+               bool(press > 0.5), int(round(min(max(smile, -1.0), 1.0) * 10)))
         if key not in self._cache:
-            self._cache[key] = self._build(key[0] / 24, key[1] / 12, key[2])
+            self._cache[key] = self._build(key[0] / 24, key[1] / 12, key[2], key[3] / 10)
         return self._cache[key]
 
-    def _build(self, o, wide, press):
+    def _build(self, o, wide, press, smile=0.0):
         w = self.w0 * (1 + 0.28 * wide)
         xs = np.linspace(-w, w, 33)
         u = xs / w
-        corner = self.smile * 0.055 * u ** 2 + 0.010 * wide * u ** 2
+        corner = (self.smile + smile) * 0.055 * u ** 2 + 0.010 * wide * u ** 2
         fall = np.sqrt(np.clip(1 - u ** 4, 0, 1))
         r = max(0.0, -wide)
         thick = (1 + 0.55 * r) * (0.7 if press else 1.0)
@@ -195,6 +197,9 @@ class Mouth:
             if o > 0.45:
                 out.append(ellipsoid((0, cy - 0.30 * span, zc + 0.002), (w * 0.40, 0.010 + 0.014 * o, 0.014),
                                      (0.75, 0.32, 0.36), detail=14))
+            if o > 0.6:
+                out.append(ellipsoid((0, cy - 0.85 * span, zc + 0.006), (w * 0.55 * (1 - 0.3 * r), 0.009, 0.011),
+                                     (0.94, 0.93, 0.90), detail=14))
         else:
             out.append(tube(path(base, 0.002), 0.005 + 0.003 * fall, (0.25, 0.10, 0.10), sides=6))
         out.append(tube(path(base + 0.016 * fall * thick + rise), (0.003 + 0.016 * fall) * thick, self.lip,
@@ -210,8 +215,23 @@ def lip_meshes(head, smile, width, skin, open_=0.0):
 
 
 def ear_meshes(side, skin):
+    rot = rot_y(-side * 0.35)
+    inner = tuple(c * 0.72 for c in skin)
     return [ellipsoid((side * 0.485, -0.09, -0.02), (0.05, 0.11, 0.075), skin,
-                      rot=rot_y(-side * 0.35), detail=18, shine=25, spec=0.1, kind="skin")]
+                      rot=rot, detail=18, shine=25, spec=0.1, kind="skin"),
+            ellipsoid((side * 0.522, -0.095, -0.005), (0.014, 0.068, 0.042), inner,
+                      rot=rot, detail=14, shine=15, spec=0.05, kind="skin", thin=True)]
+
+
+def nostril_meshes(head, skin):
+    """Two small dark openings under the nose tip."""
+    dark = tuple(c * 0.40 for c in skin)
+    out = []
+    for s in (-1, 1):
+        x, y = s * 0.046, -0.243
+        out.append(ellipsoid((x, y, head.z_at(x, y) - 0.004), (0.017, 0.011, 0.012), dark, detail=10,
+                             kind="skin", thin=True))
+    return out
 
 
 def earring_meshes(style):
@@ -242,18 +262,29 @@ def glasses_meshes(head, style):
     if style == "round":
         rx = ry = 0.125
         ring = np.stack([rx * np.cos(ang), ry * np.sin(ang)], -1)
+    elif style == "aviator":
+        rx, ry = 0.14, 0.12
+        sn = np.sin(ang)
+        ring = np.stack([rx * np.cos(ang) * (1 - 0.12 * np.clip(sn, 0, 1)), np.where(sn > 0, 0.095, 0.13) * sn], -1)
+        frame = (0.85, 0.70, 0.30)
     else:
         rx, ry = 0.14, 0.10
         ring = np.stack([rx * np.sign(np.cos(ang)) * np.abs(np.cos(ang)) ** 0.5,
                          ry * np.sign(np.sin(ang)) * np.abs(np.sin(ang)) ** 0.5], -1)
     out = []
     for s in (-1, 1):
-        pts = np.column_stack([s * EYE_X + ring[:, 0], EYE_Y + 0.01 + ring[:, 1],
+        ring_s = ring.copy()
+        if style == "cat":                      # outer corners sweep up
+            outer = np.clip(s * ring[:, 0] / rx, 0, 1)
+            ring_s[:, 1] += 0.055 * outer ** 2
+            frame = (0.55, 0.08, 0.22)
+        pts = np.column_stack([s * EYE_X + ring_s[:, 0], EYE_Y + 0.01 + ring_s[:, 1],
                                np.full(len(ring), zg)])
         out.append(tube(pts, np.full(len(pts), 0.011), frame, sides=8, cap_ends=False, **glossy))
-        if style == "sun":
+        if style in ("sun", "aviator"):
+            tint = (0.05, 0.06, 0.09) if style == "sun" else (0.10, 0.14, 0.12)
             out.append(ellipsoid((s * EYE_X, EYE_Y + 0.01, zg), (rx - 0.005, ry - 0.005, 0.006),
-                                 (0.05, 0.06, 0.09), detail=24, shine=90, spec=0.7, kind="glossy"))
+                                 tint, detail=24, shine=90, spec=0.7, kind="glossy"))
         temple = catmull([(s * (EYE_X + rx), EYE_Y + 0.01, zg), (s * 0.43, EYE_Y + 0.02, 0.35),
                           (s * 0.53, EYE_Y, 0.10), (s * 0.54, 0.0, -0.03)], 12)
         out.append(tube(temple, np.full(12, 0.010), frame, sides=8, **glossy))

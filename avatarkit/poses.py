@@ -99,9 +99,44 @@ POSE_FUNCS = {"relaxed": _relaxed, "apose": _apose, "wave": _wave, "hips": _hips
               "cheer": _cheer, "walk": _walk, "dance": _dance}
 
 
+# ---------------------------------------------------------------------------
+# Hand shapes: bend (degrees) of each finger's two joints, thumb first
+# ---------------------------------------------------------------------------
+FINGER_CODES = ("th", "ix", "md", "rg", "pk")
+HAND_SHAPES = {
+    "open": [(4, 4), (3, 3), (3, 3), (3, 3), (3, 3)],
+    "relaxed": [(14, 10), (16, 18), (20, 24), (24, 28), (28, 30)],
+    "fist": [(32, 28), (85, 90), (90, 95), (92, 95), (88, 90)],
+    "point": [(30, 26), (2, 2), (90, 95), (92, 95), (88, 90)],
+    "thumbs_up": [(2, 2), (88, 92), (92, 96), (94, 96), (90, 92)],
+}
+# which shapes each pose uses (left, right); anything else is relaxed
+POSE_HANDS = {"wave": ("relaxed", "open"), "cheer": ("open", "open"), "hips": ("fist", "fist"),
+              "apose": ("relaxed", "relaxed"), "dance": ("open", "open")}
+
+
+def hand_joints(side_name, side, shape_a, shape_b=None, t=0.0):
+    """Finger joint angles for one hand, blending shape_a -> shape_b by t (0..1)."""
+    a = HAND_SHAPES[shape_a]
+    b = HAND_SHAPES[shape_b or shape_a]
+    out = {}
+    for code, (a1, a2), (b1, b2) in zip(FINGER_CODES, a, b):
+        out[f"{code}1{side_name}"] = (0.0, 0.0, -side * (a1 + (b1 - a1) * t))
+        out[f"{code}2{side_name}"] = (0.0, 0.0, -side * (a2 + (b2 - a2) * t))
+    return out
+
+
+def set_hand(pose, side_name, side, shape_a, shape_b=None, t=0.0):
+    pose.update(hand_joints(side_name, side, shape_a, shape_b, t))
+
+
 def pose_at(name, t=0.0, animate=True):
     """Joint dict {node_name: (rx, ry, rz), 'root_dy': float} for a pose at time t."""
-    return POSE_FUNCS[name](t, animate)
+    pose = POSE_FUNCS[name](t, animate)
+    left, right = POSE_HANDS.get(name, ("relaxed", "relaxed"))
+    set_hand(pose, "L", 1, left)
+    set_hand(pose, "R", -1, right)
+    return pose
 
 
 def blink_angle(t):
@@ -156,4 +191,86 @@ def talk_overlay(pose, mouth, t, gestures=True):
             pose["arm" + name] = (arm[0] - 22.0 * g, arm[1], arm[2] + s * 10.0 * g)
             pose["fore" + name] = (fore[0] - 42.0 * g - 6.0 * b, fore[1], fore[2])
             pose["hand" + name] = (hand[0], hand[1], hand[2] + 14.0 * e * math.sin(6.0 * t + i))
+            set_hand(pose, name, s, "relaxed", "open", min(1.0, 1.4 * g))
     return pose
+
+
+# ---------------------------------------------------------------------------
+# Emotes: short one-shot animations layered over the current pose
+# ---------------------------------------------------------------------------
+EMOTES = [("Nod", "nod", 1.3), ("Shake head", "shake", 1.3), ("Shrug", "shrug", 1.7),
+          ("Bow", "bow", 2.0), ("Clap", "clap", 2.6), ("Laugh", "laugh", 2.4),
+          ("Think", "think", 2.8), ("Point", "point", 2.0), ("Say hi", "hello", 2.6)]
+EMOTE_DURATION = {key: dur for _, key, dur in EMOTES}
+
+
+def _smooth(x):
+    x = max(0.0, min(1.0, x))
+    return x * x * (3 - 2 * x)
+
+
+def _blend(pose, joint, target, w):
+    cur = pose.get(joint, (0.0, 0.0, 0.0))
+    pose[joint] = tuple(c + (t - c) * w for c, t in zip(cur, target))
+
+
+def emote_overlay(pose, name, u):
+    """Blend emote `name` at progress u (0..1) into `pose`; returns extras for face and eyes.
+
+    extras: mouth=(open, wide, press, smile) or None, brow_raise, brow_tilt, gaze or None, lid.
+    """
+    w = _smooth(u / 0.15) * _smooth((1 - u) / 0.15)
+    sin = lambda cycles: math.sin(2 * math.pi * cycles * u)
+    ex = {"mouth": None, "brow_raise": 0.0, "brow_tilt": 0.0, "gaze": None, "lid": 0.0}
+    head = pose.get("head", (0.0, 0.0, 0.0))
+    if name == "nod":
+        _blend(pose, "head", (head[0] + 15 * sin(2), head[1], head[2]), w)
+    elif name == "shake":
+        _blend(pose, "head", (head[0], head[1] + 26 * sin(2.5), head[2]), w)
+        ex["brow_raise"] = 0.2 * w
+    elif name == "shrug":
+        for n, s in SIDES:
+            _blend(pose, "arm" + n, (0.0, 0.0, s * 16), w)
+            _blend(pose, "fore" + n, (-55.0, 0.0, 0.0), w)
+        _blend(pose, "head", (head[0] + 4, head[1], 7.0), w)
+        ex.update(mouth=(0.0, 0.3, 1.0, -0.25), brow_raise=0.7 * w, brow_tilt=-0.4 * w)
+        for n, sd in SIDES:
+            set_hand(pose, n, sd, "relaxed", "open", w)
+    elif name == "bow":
+        _blend(pose, "torso", (30.0, 0.0, 0.0), w)
+        _blend(pose, "head", (14.0, 0.0, 0.0), w)
+        for n, s in SIDES:
+            _blend(pose, "arm" + n, (-12.0, 0.0, s * 6), w)
+        ex["mouth"] = (0.0, 0.2, 0.0, 0.4)
+    elif name == "clap":
+        beat = 0.5 + 0.5 * sin(5)
+        for n, s in SIDES:
+            _blend(pose, "arm" + n, (-38.0, 0.0, s * (4 + 10 * beat)), w)
+            _blend(pose, "fore" + n, (-95.0, 0.0, -s * (6 - 8 * beat)), w)
+        ex.update(mouth=(0.25, 0.4, 0.0, 0.9), brow_raise=0.4 * w)
+        for n, sd in SIDES:
+            set_hand(pose, n, sd, "relaxed", "open", w)
+    elif name == "laugh":
+        buzz = sin(7)
+        _blend(pose, "head", (head[0] - 8 + 4 * buzz, head[1], head[2]), w)
+        _blend(pose, "torso", (-5 + 3 * buzz, 0.0, 0.0), w)
+        ex.update(mouth=(0.5 + 0.3 * buzz, 0.5, 0.0, 0.9), brow_raise=0.5 * w, lid=6 * w)
+    elif name == "think":
+        _blend(pose, "armR", (-62.0, 0.0, -10.0), w)
+        _blend(pose, "foreR", (-128.0, 0.0, 0.0), w)
+        _blend(pose, "head", (head[0] - 4, head[1] + 12, 9.0), w)
+        ex.update(mouth=(0.0, -0.3, 1.0, -0.1), brow_raise=0.3 * w, brow_tilt=0.3 * w,
+                  gaze=(-7 * w, 10 * w))
+        set_hand(pose, "R", -1, "relaxed", "fist", w)
+    elif name == "point":
+        _blend(pose, "armR", (-82.0, 0.0, -14.0), w)
+        _blend(pose, "foreR", (-6.0, 0.0, 0.0), w)
+        _blend(pose, "head", (head[0], head[1] - 10, head[2]), w)
+        ex.update(mouth=(0.1, 0.5, 0.0, 0.6), gaze=(0.0, -9 * w))
+        set_hand(pose, "R", -1, "relaxed", "point", w)
+    elif name == "hello":
+        _blend(pose, "armR", (0.0, 0.0, -105.0), w)
+        _blend(pose, "foreR", (0.0, 0.0, -(28.0 + 20.0 * sin(3))), w)
+        ex.update(mouth=(0.3, 0.5, 0.0, 0.8), brow_raise=0.4 * w)
+        set_hand(pose, "R", -1, "relaxed", "open", w)
+    return ex

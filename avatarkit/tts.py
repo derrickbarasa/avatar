@@ -41,25 +41,31 @@ def _run(cmd, env=None, timeout=60):
     return res.stdout
 
 
-def list_voices():
-    """Installed voice names (best effort; [] if the engine can't list them)."""
+def list_voices_info():
+    """Installed voices as [(name, two-letter language)] (best effort; [] if not listable)."""
     b = backend()
     try:
         if b == "powershell":
             script = ("Add-Type -AssemblyName System.Speech; "
                       "(New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | "
-                      "ForEach-Object { if ($_.Enabled) { $_.VoiceInfo.Name } }")
+                      "ForEach-Object { if ($_.Enabled) { $_.VoiceInfo.Name + '|' + $_.VoiceInfo.Culture.Name } }")
             out = _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], timeout=30)
-            return [line.strip() for line in out.splitlines() if line.strip()]
+            rows = [line.strip().split("|") for line in out.splitlines() if line.strip()]
+            return [(r[0], (r[1] if len(r) > 1 else "en")[:2].lower()) for r in rows]
         if b == "say":
-            out = _run(["say", "-v", "?"])
-            return [line.split()[0] for line in out.splitlines() if line.strip()]
+            rows = [line.split() for line in _run(["say", "-v", "?"]).splitlines() if line.strip()]
+            return [(r[0], r[1][:2].lower() if len(r) > 1 else "en") for r in rows]
         if b in ("espeak-ng", "espeak"):
-            out = _run([b, "--voices=en"])
-            return [line.split()[3] for line in out.splitlines()[1:] if len(line.split()) > 3]
+            rows = [line.split() for line in _run([b, "--voices"]).splitlines()[1:] if len(line.split()) > 3]
+            return [(r[3], r[1].split("-")[0][:2].lower()) for r in rows]
     except (TTSError, OSError, subprocess.TimeoutExpired):
         pass
     return []
+
+
+def list_voices():
+    """Installed voice names."""
+    return [name for name, _ in list_voices_info()]
 
 
 def synthesize(text, voice="", rate="Normal"):
@@ -122,9 +128,11 @@ class VoiceList(threading.Thread):
 
     def __init__(self):
         super().__init__(daemon=True)
-        self.voices, self.done = [], False
+        self.voices, self.langs, self.done = [], {}, False
         self.start()
 
     def run(self):
-        self.voices = list_voices()
+        info = list_voices_info()
+        self.voices = [name for name, _ in info]
+        self.langs = dict(info)          # voice name -> two-letter language
         self.done = True

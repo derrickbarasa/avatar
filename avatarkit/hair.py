@@ -5,7 +5,7 @@ import numpy as np
 
 from .head import MOUTH_Y
 from .mathutil import catmull, mix, rot_x, smoothstep
-from .mesh import Mesh, ellipsoid, grid_faces, tube, unit_sphere_z
+from .mesh import Mesh, ellipsoid, grid_faces, loft, tube, unit_sphere_z
 from .strands import facial_strand_meshes, mustache_margin, strand_meshes
 
 HAIR = dict(shine=40, spec=0.25, kind="hair")
@@ -16,7 +16,7 @@ HAIRLINES = {  # hairline height at azimuth 0, 40, 80, 110, 150, 180 degrees fro
     "afro": [0.34, 0.30, 0.22, 0.15, 0.00, -0.25],
     "bangs": [0.27, 0.27, 0.12, -0.02, -0.20, -0.35],
 }
-for _name in ("buzz", "bun", "ponytail", "quiff", "mohawk", "curly"):
+for _name in ("buzz", "bun", "ponytail", "quiff", "mohawk", "curly", "pigtails", "braid"):
     HAIRLINES[_name] = HAIRLINES["short"]
 HAIRLINES["bob"] = HAIRLINES["long"]
 AZIMUTHS = np.radians([0, 40, 80, 110, 150, 180])
@@ -52,6 +52,19 @@ def _under_layer(head, style, color, margin):
         out.append(hair_curtain(color, 1.35))
     elif style in ("bob", "bangs"):
         out.append(hair_curtain(color, 0.7))
+    elif style == "pigtails":
+        for s in (-1, 1):
+            path = catmull([(s * 0.44, 0.10, -0.28), (s * 0.60, -0.05, -0.32), (s * 0.66, -0.55, -0.28),
+                            (s * 0.64, -1.05, -0.20)], 20)
+            radii = catmull([(0.06,), (0.10,), (0.09,), (0.03,)], 20)[:, 0]
+            out.append(tube(path, radii, color, **HAIR))
+            out.append(ellipsoid((s * 0.45, 0.10, -0.28), (0.07, 0.07, 0.06), (0.85, 0.25, 0.35), thin=True))
+    elif style == "braid":
+        path = catmull([(0, 0.26, -0.52), (0, 0.05, -0.74), (0, -0.60, -0.76), (0, -1.25, -0.70)], 30)
+        radii = np.linspace(0.075, 0.04, 30)
+        out.append(tube(path, radii, color, **HAIR))
+        out.append(ellipsoid((0, 0.26, -0.52), (0.08, 0.08, 0.06), (0.85, 0.25, 0.35), thin=True))
+        out.append(ellipsoid((0, -1.25, -0.70), (0.06, 0.05, 0.06), (0.85, 0.25, 0.35), thin=True))
     elif style == "ponytail":
         path = catmull([(0, 0.32, -0.50), (0, 0.18, -0.74), (0, -0.25, -0.80), (0, -0.78, -0.70)], 20)
         radii = catmull([(0.07,), (0.11,), (0.09,), (0.025,)], 20)[:, 0]
@@ -82,11 +95,47 @@ def hat_meshes(head, kind, color):
         out.append(tube(cuff, np.full(len(phi), 0.05), mix(color, (0, 0, 0), 0.15), sides=10,
                         cap_ends=False, **fabric))
         return out
+    if kind == "bucket":
+        out = [head.shell(head.Y - 0.13, 0.075 + 0.02 * top, color, 0.03, **fabric)]
+        out.append(loft(np.array([0.24, 0.18, 0.14]), np.array([0.62, 0.74, 0.80]), np.array([0.68, 0.80, 0.86]),
+                        np.array([0.68, 0.80, 0.86]), color, cap_ends=False, **fabric))
+        out.append(_hat_band(0.24, 0.085, mix(color, (0, 0, 0), 0.35), fabric))
+        return out
+    if kind == "tophat":
+        ys = np.linspace(0.20, 0.98, 12)
+        taper = 1 - 0.06 * (ys - 0.20) / 0.78
+        out = [loft(ys, 0.60 * taper, 0.66 * taper, 0.66 * taper, color, **fabric),
+               loft(np.array([0.21, 0.17]), np.array([0.62, 0.95]), np.array([0.68, 1.02]),
+                    np.array([0.68, 1.02]), color, **fabric),
+               _hat_band(0.30, 0.13, mix(color, (1, 1, 1), 0.5), fabric, radius=0.10)]
+        return out
     levels = [0.28, 0.26, 0.16, 0.10]
     return [head.shell(head.Y - np.interp(theta, keys, levels), 0.06 + 0.03 * top, color, 0.03, **fabric),
             ellipsoid((0, 0.27, 0.60), (0.29, 0.022, 0.30), color, rot=rot_x(math.radians(14)),
                       detail=28, **fabric),
             ellipsoid((0, 0.66, 0.0), (0.035, 0.03, 0.035), mix(color, (0, 0, 0), 0.2), **fabric)]
+
+
+def _hat_band(y, thick, color, material, radius=0.0):
+    """A ribbon around the hat just above the brim."""
+    phi = np.linspace(math.pi, 3 * math.pi, 40)
+    half = math.sqrt(max(0.0, 1 - (min(y, 0.6) / 0.62) ** 2))
+    rx, rz = (0.5 * half + 0.08 + radius), (0.56 * half + 0.08 + radius)
+    ring = np.stack([rx * np.sin(phi), np.full(len(phi), y), rz * np.cos(phi)], -1)
+    return tube(ring, np.full(len(phi), thick * 0.4), color, sides=10, cap_ends=False, **material)
+
+
+def headphone_meshes(color):
+    """Over-ear headphones: a band over the head and two cups with a coloured ring."""
+    glossy = dict(shine=50, spec=0.3, kind="glossy")
+    dark = (0.12, 0.12, 0.15)
+    th = np.radians(np.linspace(-90, 90, 30))
+    band = np.stack([0.60 * np.sin(th), 0.02 + 0.74 * np.cos(th), np.full(30, -0.02)], -1)
+    out = [tube(band, np.full(30, 0.03), dark, sides=10, **glossy)]
+    for s in (-1, 1):
+        out.append(ellipsoid((s * 0.60, -0.02, -0.02), (0.085, 0.17, 0.15), dark, detail=20, **glossy))
+        out.append(ellipsoid((s * 0.665, -0.02, -0.02), (0.02, 0.12, 0.11), color, detail=16, **glossy))
+    return out
 
 
 def afro_mesh(color):
@@ -129,4 +178,7 @@ def facial_hair_meshes(head, style, color):
         margin = np.where(head.Y > -0.22, -1.0, np.minimum(jaw, mouth * 0.15))
         out.append(head.shell(margin * 0.35, 0.03, dark, 0.03, **HAIR))   # soft top edge
     out.append(head.shell(mustache_margin(head), 0.010, dark, 0.3, **HAIR))
-    return out + facial_strand_meshes(head, margin, color, beard)
+    out += facial_strand_meshes(head, margin, color, beard)
+    for m in out:
+        m.jaw_follow = True          # the beard moves with the jaw
+    return out
