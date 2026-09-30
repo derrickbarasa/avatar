@@ -22,11 +22,12 @@ uniform float uStrandScale;
 uniform vec3 uSwing;          // hair sway (side, unused, fore-aft)
 uniform float uSwingScale;
 uniform float uJaw;           // how far the lower face drops (world units), face meshes only
+uniform float uJawShift;      // how far a raised head has moved the jaw region
 vec4 displaced(vec4 v) {
     vec2 aux = gl_MultiTexCoord1.xy;   // strands: (radius, distance along the strand 0..1)
     v.xyz += gl_Normal * (aux.x * (uStrandScale - 1.0));
     v.xyz += vec3(uSwing.x, -abs(uSwing.x) * 0.25, uSwing.z) * (aux.y * aux.y * uSwingScale);
-    float jaw = smoothstep(-0.33, -0.46, v.y) * smoothstep(-0.15, 0.2, v.z);
+    float jaw = smoothstep(-0.33, -0.46, v.y - uJawShift) * smoothstep(-0.15, 0.2, v.z);
     v.y -= uJaw * jaw;
     v.z -= uJaw * jaw * 0.25;
     return v;
@@ -61,20 +62,21 @@ void main() {
 """
 
 SHADOW_LOOKUP = """
-uniform sampler2D uShadow;
+uniform sampler2DShadow uShadow;   // depth texture with hardware compare: every tap is already a 2x2 filter
 uniform float uShadowOn;
 uniform float uShadowTexel;
 varying vec4 vLight;
-float shadowAmount(float ndl, float biasScale) {
+float shadowAmount(float ndl, float biasScale, float radius) {
     vec3 p = vLight.xyz / vLight.w * 0.5 + 0.5;
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
     float bias = (0.0007 + 0.0032 * (1.0 - clamp(ndl, 0.0, 1.0))) * biasScale;
     float lit = 0.0, wsum = 0.0;
-    for (int i = -2; i <= 2; i++) {
-        for (int j = -2; j <= 2; j++) {
-            float w = 1.0 - 0.16 * float(i * i + j * j);          // soft, round kernel: no banding
-            float d = texture2D(uShadow, p.xy + vec2(float(i), float(j)) * uShadowTexel * 1.25).r;
-            lit += w * ((p.z - bias > d) ? 0.0 : 1.0);
+    for (int i = -1; i <= 1; i++) {                                  // radius 1 = 3x3 taps, 0 = a single tap
+        for (int j = -1; j <= 1; j++) {
+            if (abs(float(i)) > radius || abs(float(j)) > radius) continue;
+            float w = 1.0 - 0.25 * float(i * i + j * j);           // soft, round kernel: no banding
+            lit += w * shadow2D(uShadow, vec3(p.xy + vec2(float(i), float(j)) * uShadowTexel * 1.5,
+                                              p.z - bias)).r;
             wsum += w;
         }
     }
@@ -98,23 +100,26 @@ uniform float uFreckle;
 uniform vec3 uCenter;
 uniform float uStrand;
 uniform mat4 uInvView;
-uniform sampler2D uAoMap;
+uniform sampler2DShadow uAoMap;
 uniform float uAoOn;
 uniform float uAoTexel;
+uniform float uTaps;          // shadow filter radius: 1 = 3x3 taps, 0 = one
 varying vec4 vAO;
 """ + SHADOW_LOOKUP + """
 // Ambient occlusion: how much of the sky is open above this point (a wide, soft shadow from overhead).
-float skyOpen(vec3 nEye, float biasScale) {
+float skyOpen(vec3 nEye, float biasScale, float radius) {
     vec3 p = vAO.xyz / vAO.w * 0.5 + 0.5;
     if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
     vec3 nw = mat3(uInvView) * nEye;
     float bias = (0.0025 + 0.010 * (1.0 - clamp(nw.y, 0.0, 1.0))) * biasScale;
     float lit = 0.0, wsum = 0.0;
-    for (int i = -3; i <= 3; i++) {
-        for (int j = -3; j <= 3; j++) {
-            float w = max(1.0 - 0.055 * float(i * i + j * j), 0.0);
-            float d = texture2D(uAoMap, p.xy + vec2(float(i), float(j)) * uAoTexel * 3.5).r;
-            lit += w * ((p.z - bias > d) ? 0.0 : 1.0);
+    float spread = radius < 1.5 ? 6.0 : 3.0;                         // fewer taps are spread wider
+    for (int i = -2; i <= 2; i++) {
+        for (int j = -2; j <= 2; j++) {
+            if (abs(float(i)) > radius || abs(float(j)) > radius) continue;
+            float w = max(1.0 - 0.09 * float(i * i + j * j), 0.0);
+            lit += w * shadow2D(uAoMap, vec3(p.xy + vec2(float(i), float(j)) * uAoTexel * spread,
+                                             p.z - bias)).r;
             wsum += w;
         }
     }
@@ -211,7 +216,7 @@ void main() {
     vec3 L2 = normalize(gl_LightSource[2].position.xyz);
     float ndl = dot(N, L0);
     // cast shadows from the key light; thin strands need a bigger bias or they shadow themselves
-    float sh = uShadowOn > 0.5 ? shadowAmount(ndl, uStrand > 0.5 ? 4.0 : 1.0) : 1.0;
+    float sh = uShadowOn > 0.5 ? shadowAmount(ndl, uStrand > 0.5 ? 4.0 : 1.0, uStrand > 0.5 ? 0.0 : uTaps) : 1.0;
     float lit = (isSkin ? smoothstep(-0.50, 0.65, ndl) : smoothstep(-0.15, 0.35, ndl)) * sh;
     float hi = (isSkin ? smoothstep(0.10, 1.00, ndl) * 0.7 : smoothstep(0.25, 0.95, ndl)) * sh;
     vec3 shadowTint = isSkin ? vec3(0.80, 0.58, 0.60) : vec3(0.62, 0.60, 0.78);
@@ -223,7 +228,7 @@ void main() {
         c += base * vec3(0.30, 0.06, 0.02) * smoothstep(0.35, 0.0, abs(ndl - 0.08)) * 0.5 * mix(0.4, 1.0, sh);
     }
     if (uAoOn > 0.5) {
-        float open = skyOpen(N, uStrand > 0.5 ? 3.0 : 1.0);
+        float open = skyOpen(N, uStrand > 0.5 ? 3.0 : 1.0, uStrand > 0.5 ? 0.0 : 2.0);
         c *= mix(uStrand > 0.5 ? 0.88 : 0.76, 1.0, open);
     }
     float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);
@@ -296,7 +301,7 @@ GROUND_FRAGMENT = """
 varying vec3 vObj;
 """ + SHADOW_LOOKUP + """
 void main() {
-    float sh = uShadowOn > 0.5 ? shadowAmount(1.0, 1.0) : 1.0;
+    float sh = uShadowOn > 0.5 ? shadowAmount(1.0, 1.0, 1.0) : 1.0;
     float fall = 1.0 - smoothstep(2.2, 6.0, length(vObj.xz));
     gl_FragColor = vec4(0.05, 0.06, 0.12, (1.0 - sh) * 0.34 * fall);
 }
@@ -388,8 +393,10 @@ class ShadowMap:
             glBindTexture(GL_TEXTURE_2D, self.tex)
             glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, size, size, 0, GL_DEPTH_COMPONENT,
                          GL_FLOAT, None)
-            for name, val in ((GL_TEXTURE_MIN_FILTER, GL_NEAREST), (GL_TEXTURE_MAG_FILTER, GL_NEAREST),
-                              (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
+            for name, val in ((GL_TEXTURE_MIN_FILTER, GL_LINEAR), (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
+                              (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE),
+                              (GL_TEXTURE_COMPARE_MODE, GL_COMPARE_R_TO_TEXTURE),
+                              (GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL)):
                 glTexParameteri(GL_TEXTURE_2D, name, val)
             self.fbo = glGenFramebuffers(1)
             glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
@@ -420,11 +427,11 @@ class Renderer:
 
         self.prog, self.oprog = program(VERTEX, FRAGMENT), program(OUTLINE_VERTEX, OUTLINE_FRAGMENT)
         self.dprog, self.gprog = program(DEPTH_VERTEX, DEPTH_FRAGMENT), program(GROUND_VERTEX, GROUND_FRAGMENT)
-        disp = ("uStrandScale", "uSwing", "uSwingScale", "uJaw")
+        disp = ("uStrandScale", "uSwing", "uSwingScale", "uJaw", "uJawShift")
         loc = lambda p, names: {n: glGetUniformLocation(p, n) for n in names}
         self.u = loc(self.prog, ("uKind", "uSpec", "uShine", "uColor2", "uPattern", "uFreckle", "uCenter",
                                  "uStrand", "uLightVP", "uInvView", "uShadow", "uShadowOn", "uShadowTexel",
-                                 "uAoVP", "uAoMap", "uAoOn", "uAoTexel") + disp)
+                                 "uAoVP", "uAoMap", "uAoOn", "uAoTexel", "uTaps") + disp)
         self.ou = loc(self.oprog, ("uPx", "uViewH", "uOutline") + disp)
         self.du = loc(self.dprog, disp)
         self.gu = loc(self.gprog, ("uLightVP", "uInvView", "uShadow", "uShadowOn", "uShadowTexel"))
@@ -435,10 +442,11 @@ class Renderer:
         self.inv_view = np.eye(4)
         self.view_h = 720.0
         self.shadow = ShadowMap()
-        self.ao = ShadowMap(1024)
+        self.ao = ShadowMap(512)
         self.ao_vp = np.eye(4)
         self.target_fbo = 0            # where the scene is drawn (an off-screen buffer for hi-res captures)
         self.px_scale = 1.0            # outline width multiplier when supersampling
+        self.quality = 1.0
         self.offscreen = None
         glEnable(GL_MULTISAMPLE)
         glEnable(GL_DEPTH_TEST)
@@ -458,18 +466,20 @@ class Renderer:
 
     # ---- scene ---------------------------------------------------------------
     def draw_scene(self, rig, pose, cam, bg, size, blink=0.0, transparent=False, reserved=0,
-                   gaze=(0.0, 0.0), lid=0.0, jaw=0.0, swing=(0.0, 0.0, 0.0), shadows=True):
+                   gaze=(0.0, 0.0), lid=0.0, jaw=0.0, swing=(0.0, 0.0, 0.0), shadows=True, quality=1.0):
         """Draw into the whole window; `reserved` px on the right (the UI card) are kept free by
         shifting the lens, so the avatar stays centred in the remaining area.
 
         gaze (pitch, yaw) turns the eyes; lid closes the lids extra (expressions); jaw is how far the
-        lower face drops (talking); swing is the hair sway; shadows toggles the cast shadows.
+        lower face drops (talking); swing is the hair sway; shadows toggles the cast shadows;
+        quality 1.0 / 0.6 / 0.3 (High / Balanced / Fast) thins the hair and, below 1, drops ambient occlusion.
         """
+        self.quality = quality
         w, h = size
         self.view_h = float(h)
         self.blink, self.gaze, self.lid, self.jaw, self.swing = blink, gaze, lid, jaw, swing
         # Fewer strands at a distance (drawn thicker) keeps long hair light on the GPU.
-        self.lod = float(np.interp(cam.dist, [3.3, 6.5, 10.0, 15.0], [1.0, 0.85, 0.65, 0.5]))
+        self.lod = float(np.interp(cam.dist, [3.3, 6.5, 10.0, 15.0], [1.0, 0.85, 0.65, 0.5])) * (0.4 + 0.6 * quality)
         self.strand_scale = 1.0 / math.sqrt(self.lod)
         view = cam.matrix()
         self.inv_view = np.linalg.inv(view)
@@ -524,7 +534,7 @@ class Renderer:
         light_view, light_proj = self._light_matrices(view, rig)
         self.light_vp = light_proj @ light_view
         self._depth_pass(self.shadow, rig, pose, light_view, light_proj)
-        if self.ao.ok:
+        if self.ao.ok and self.quality >= 1.0:
             sky_view, sky_proj = self._sky_matrices(rig)
             self.ao_vp = sky_proj @ sky_view
             self._depth_pass(self.ao, rig, pose, sky_view, sky_proj)
@@ -618,8 +628,9 @@ class Renderer:
         glUniform1f(u["uShadowTexel"], 1.0 / self.shadow.size)
         glUniformMatrix4fv(u["uAoVP"], 1, GL_TRUE, self.ao_vp.astype(np.float32))
         glUniform1i(u["uAoMap"], 2)
-        glUniform1f(u["uAoOn"], 1.0 if (use_shadow and self.ao.ok) else 0.0)
+        glUniform1f(u["uAoOn"], 1.0 if (use_shadow and self.ao.ok and self.quality >= 1.0) else 0.0)
         glUniform1f(u["uAoTexel"], 1.0 / self.ao.size)
+        glUniform1f(u["uTaps"], 1.0 if self.quality >= 1.0 else 0.0)
         self._set_displacement(u)
         self._walk(rig.root, pose, self._draw_mesh)
         glUseProgram(0)
@@ -666,6 +677,7 @@ class Renderer:
     def _mesh_displacement(self, u, m):
         glUniform1f(u["uSwingScale"], m.swing if m.strand else 0.0)
         glUniform1f(u["uJaw"], self.jaw if m.jaw_follow else 0.0)
+        glUniform1f(u["uJawShift"], m.jaw_shift if m.jaw_follow else 0.0)
         glUniform1f(u["uStrandScale"], self.strand_scale if m.strand else 1.0)
 
     def _arrays(self, m):

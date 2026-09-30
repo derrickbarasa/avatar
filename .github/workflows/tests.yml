@@ -21,3 +21,24 @@ jobs:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
         run: python -m unittest discover -s tests
+
+  # Drives the real window, the shaders and every export on a virtual display with software OpenGL.
+  # Advisory for now (a runner's GPU emulation can differ from real hardware), so it never fails the build.
+  gui:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libgl1 libglu1-mesa libgl1-mesa-dri xvfb ffmpeg
+      - run: pip install -r requirements.txt
+      - name: GUI smoke test
+        env:
+          SDL_AUDIODRIVER: dummy
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          MESA_GL_VERSION_OVERRIDE: "3.3COMPAT"
+          MESA_GLSL_VERSION_OVERRIDE: "330"
+        run: xvfb-run -a -s "-screen 0 1400x900x24" python tests/smoke_gui.py

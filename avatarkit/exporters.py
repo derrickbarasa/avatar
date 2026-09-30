@@ -168,12 +168,44 @@ def _write_glb(path, doc, buf):
         f.write(struct.pack("<I4s", len(data), b"BIN\0") + data)
 
 
+def _animations(buf, rig, node_index, clips, scale, root_base):
+    """glTF animations from clips [(name, times, poses)]: a rotation track per moving bone and a
+    translation track for the root's bounce. Quaternions are kept on one side so playback never flips."""
+    out = []
+    for clip_name, times, poses in clips:
+        t_acc = buf.add(np.asarray(times, np.float32).reshape(-1, 1), None, FLOAT, "SCALAR", minmax=True)
+        samplers, channels = [], []
+
+        def track(bone, path, kind, data):
+            samplers.append({"input": t_acc, "output": buf.add(np.asarray(data, np.float32), None, FLOAT, kind),
+                             "interpolation": "LINEAR"})
+            channels.append({"sampler": len(samplers) - 1,
+                             "target": {"node": node_index[bone], "path": path}})
+
+        for bone in rig.nodes:
+            if not any(any(p.get(bone, (0.0, 0.0, 0.0))) for p in poses):
+                continue
+            quats = np.array([matrix_to_quat(euler_matrix(*p.get(bone, (0.0, 0.0, 0.0)))) for p in poses])
+            for i in range(1, len(quats)):
+                if quats[i] @ quats[i - 1] < 0:
+                    quats[i] = -quats[i]
+            track(bone, "rotation", "VEC4", quats)
+        dy = np.array([p.get("root_dy", 0.0) for p in poses]) * scale
+        if np.any(dy):
+            track(rig.root.name, "translation", "VEC3", root_base + np.column_stack([np.zeros_like(dy), dy,
+                                                                                    np.zeros_like(dy)]))
+        if channels:
+            out.append({"name": clip_name, "samplers": samplers, "channels": channels})
+    return out
+
+
 def export_skinned(rig, path, pose=None, name="Avatar", vrm=False, scale=1.0, feet_on_ground=False,
-                   strand_fraction=1.0):
+                   strand_fraction=1.0, clips=None):
     """Skinned glTF: bones are the rig nodes (posed like `pose`), every mesh is bound
     to its own bone with weight 1, and the file is written in the bind (rest) pose.
 
     With vrm=True it also carries VRM 1.0 metadata and the humanoid bone map, in metres.
+    `clips` (see clips.py) adds animations that play the rig's bones.
     """
     pose = pose or {}
     buf = _Buffer()
@@ -242,6 +274,7 @@ def export_skinned(rig, path, pose=None, name="Avatar", vrm=False, scale=1.0, fe
             prims.append({"attributes": attrs, "material": material(m),
                           "indices": buf.add(f, ELEMENT_BUFFER, UINT, "SCALAR")})
 
+    animations = _animations(buf, rig, node_index, clips, scale, world_pivot(rig.root)) if clips else []
     mesh_node = len(nodes)
     nodes.append({"name": name + "_mesh", "mesh": 0, "skin": 0})
     doc = {"asset": {"version": "2.0", "generator": "avatarkit"},
@@ -251,6 +284,8 @@ def export_skinned(rig, path, pose=None, name="Avatar", vrm=False, scale=1.0, fe
                       "inverseBindMatrices": ibm_acc}],
            "materials": materials, "accessors": buf.accessors, "bufferViews": buf.views,
            "buffers": [{"byteLength": len(buf.data)}]}
+    if animations:
+        doc["animations"] = animations
     if vrm:
         bones = {VRM_BONES[n]: {"node": node_index[n]} for n in VRM_BONES if n in node_index}
         doc["extensionsUsed"] = ["VRMC_vrm"]
@@ -265,9 +300,10 @@ def export_skinned(rig, path, pose=None, name="Avatar", vrm=False, scale=1.0, fe
     _write_glb(path, doc, buf)
 
 
-def export_vrm(rig, path, pose=None, name="Avatar", strand_fraction=0.35):
+def export_vrm(rig, path, pose=None, name="Avatar", strand_fraction=0.35, clips=None):
     """VRM 1.0 humanoid (metres, feet on the ground). Expressions/blendshapes are not included.
 
-    Hair strands are thinned to `strand_fraction` because avatar apps prefer small meshes."""
+    Hair strands are thinned to `strand_fraction` because avatar apps prefer small meshes.
+    `clips` adds animations (the file still opens as a normal VRM)."""
     export_skinned(rig, path, pose, name=name, vrm=True, scale=VRM_HEIGHT_M / 8.4, feet_on_ground=True,
-                   strand_fraction=strand_fraction)
+                   strand_fraction=strand_fraction, clips=clips)

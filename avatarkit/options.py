@@ -113,7 +113,8 @@ _DEFS = [
     ("build", "Build", [("Slim", 0.9), ("Average", 1.0), ("Broad", 1.12)], 1),
     ("height", "Height", [("Short", 0.93), ("Average", 1.0), ("Tall", 1.08)], 1),
     ("top", "Top", [("T-shirt", "tee"), ("Long sleeve", "long"), ("Tank top", "tank"),
-                    ("Hoodie", "hoodie"), ("Jacket", "jacket"), ("Dress", "dress")], 0),
+                    ("Hoodie", "hoodie"), ("Jacket", "jacket"), ("Dress", "dress"),
+                    ("Polo", "polo"), ("Sweater", "sweater")], 0),
     ("topcolor", "Top color", CLOTH_COLORS, 7),
     ("pattern", "Top pattern", PATTERNS, 0),
     ("patterncolor", "Pattern color", CLOTH_COLORS, 0),
@@ -139,6 +140,11 @@ _DEFS = [
     ("headphones", "Headphones", [("None", False), ("Headphones", True)], 0),
     ("neckwear", "Neckwear", [("None", "none"), ("Bow tie", "bowtie"), ("Tie", "tie")], 0),
     ("neckcolor", "Neckwear color", CLOTH_COLORS, 2),
+    ("shoulders", "Shoulders", [("Narrow", 0.88), ("Average", 1.0), ("Wide", 1.14)], 1),
+    ("hips", "Hips", [("Narrow", 0.88), ("Average", 1.0), ("Wide", 1.14)], 1),
+    ("headsize", "Head size", [("Small", 0.92), ("Average", 1.0), ("Large", 1.10)], 1),
+    ("neck", "Neck", [("Short", -0.05), ("Average", 0.0), ("Long", 0.11)], 1),
+    ("quality", "Quality", [("High", 1.0), ("Balanced", 0.6), ("Fast", 0.3)], 0),
 ]
 
 OPTIONS = [(k, label, opts) for k, label, opts, _ in _DEFS]
@@ -150,12 +156,12 @@ TABS = [
     ("Face", ["skin", "freckles", "face", "nose", "mouth", "expression", "eyes", "eyesize",
               "brows", "facial", "glasses", "earrings"]),
     ("Hair", ["hair", "haircolor", "hat", "hatcolor"]),
-    ("Body", ["bodytype", "build", "height"]),
+    ("Body", ["bodytype", "build", "height", "shoulders", "hips", "headsize", "neck"]),
     ("Outfit", ["top", "topcolor", "pattern", "patterncolor", "pants", "pantscolor",
                 "shoestyle", "shoes"]),
     ("Extras", ["necklace", "neckwear", "neckcolor", "scarf", "scarfcolor", "headphones", "watch", "bag",
                 "bagcolor"]),
-    ("Scene", ["pose", "animate", "shadows", "physics", "bg", "preset"]),
+    ("Scene", ["pose", "animate", "quality", "shadows", "physics", "bg", "preset"]),
     ("Talk", ["voice", "speed", "gestures"]),
     ("Library", []),
 ]
@@ -205,7 +211,7 @@ OPTION_KEYS = [k for k, _, _ in OPTIONS]
 
 # Options that don't change the meshes, so no rebuild is needed when they change.
 TALK_KEYS = {"voice", "speed", "gestures"}
-VIEW_KEYS = {"shadows", "physics"}          # how it is drawn, not what the avatar is
+VIEW_KEYS = {"shadows", "physics", "quality"}        # how it is drawn, not what the avatar is
 NON_BUILD_KEYS = {"pose", "animate", "bg", "preset"} | TALK_KEYS | VIEW_KEYS
 NO_RANDOM = {"pose", "animate", "bg", "preset"} | TALK_KEYS | VIEW_KEYS
 CODE_KEYS = [k for k in OPTION_KEYS if k not in ("preset", "animate") and k not in TALK_KEYS | VIEW_KEYS]

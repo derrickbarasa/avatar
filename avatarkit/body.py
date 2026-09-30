@@ -51,8 +51,9 @@ class Torso:
         return bf * np.clip(1 - (np.abs(xs) / a) ** 2.4, 0, 1) ** (1 / 2.4)
 
 
-def neck_mesh(skin):
-    neck = catmull([(0, -0.28, 0.02), (0, -0.55, 0.03), (0, -0.85, 0.0)], 10)
+def neck_mesh(skin, lift=0.0):
+    """The neck; `lift` raises the top (the head moves up with it) for a longer or shorter neck."""
+    neck = catmull([(0, -0.28 + lift, 0.02), (0, -0.55 + lift * 0.5, 0.03), (0, -0.85, 0.0)], 10)
     return tube(neck, np.linspace(0.235, 0.27, 10), skin, kind="skin")
 
 
@@ -117,25 +118,28 @@ def leg_curve(keys, m, t0, t1):
     return limb_curve(keys, m, t0, t1, LEG_HUMPS)
 
 
-def arm_keys(s, build, radius, height):
+def arm_keys(s, build, radius, height, shoulders=1.0):
     keys = np.array([(0.98, -1.36, 0.00, 0.190),   # shoulder
                      (1.05, -2.05, 0.02, 0.170),   # biceps
                      (1.10, -2.85, 0.05, 0.155),   # elbow
                      (1.13, -3.50, 0.08, 0.140),   # forearm
                      (1.16, -4.15, 0.10, 0.115)])  # wrist
     keys[:, 0] *= s * build
+    # wider shoulders move the shoulder joint out with the torso, easing back toward the hand
+    keys[:, 0] += s * build * 0.9 * (shoulders - 1.0) * np.array([1.0, 1.0, 0.6, 0.35, 0.2])
     keys[:, 3] *= radius
     keys[:, 1] = -1.36 + (keys[:, 1] + 1.36) * height ** 0.8
     return keys
 
 
-def leg_keys(s, build, radius, height):
+def leg_keys(s, build, radius, height, hips=1.0):
     keys = np.array([(0.360, -3.95, 0.000, 0.300),  # hip
                      (0.385, -4.75, 0.015, 0.270),  # thigh
                      (0.400, -5.60, 0.030, 0.215),  # knee
                      (0.395, -6.40, 0.000, 0.200),  # calf
                      (0.380, -7.25, 0.000, 0.150)])  # ankle
     keys[:, 0] *= s * build
+    keys[:, 0] += s * build * 0.6 * 0.36 * (hips - 1.0) * np.array([1.0, 1.0, 0.6, 0.3, 0.1])
     keys[:, 3] *= radius
     keys[:, 1] = -3.95 + (keys[:, 1] + 3.95) * height
     return keys
@@ -147,14 +151,22 @@ def build_body(v):
     skin = tuple(v["skin"])
     top, pants, shoestyle = v["top"], v["pants"], v["shoestyle"]
     tcol, pcol, scol = v["topcolor"], v["pantscolor"], v["shoes"]
+    style = top                                # what was chosen; polo and sweater reuse the tee / long-sleeve cut
     dress = top == "dress"
     if dress:                                  # a dress is a short-sleeved top with a long flared skirt
         top, pants, pcol = "tee", "skirt", tcol
+    elif top == "polo":
+        top = "tee"
+    elif top == "sweater":
+        top = "long"
     body_type, build, height = v["bodytype"], v["build"], v["height"]
+    shoulders, hips = v["shoulders"], v["hips"]
+    body_type = (body_type[0] * shoulders, body_type[1], body_type[2], body_type[3] * hips,
+                 body_type[4], body_type[5])
     radius = math.sqrt(build) * body_type[5]
     torso = Torso(body_type, build)
     sk = dict(kind="skin")
-    bulk = {"hoodie": 0.07, "jacket": 0.06}.get(top, 0.035)
+    bulk = {"hoodie": 0.07, "jacket": 0.06, "sweater": 0.055}.get(style, 0.035)
     hem = -3.72 if bulk < 0.05 else -3.85
     if dress:
         hem = -3.4
@@ -196,6 +208,26 @@ def build_body(v):
         collar = np.stack([0.34 * np.sin(phi), np.full(len(phi), -1.05), 0.30 * np.cos(phi)], -1)
         trunk.add(tube(collar, np.full(len(phi), 0.06), mix(tcol, (0, 0, 0), 0.15), sides=10,
                        cap_ends=False, **CLOTH))
+    trim = mix(tcol, (0, 0, 0), 0.18)
+    if style in ("polo", "sweater"):
+        phi = np.linspace(0, 2 * math.pi, 36)
+        polo = style == "polo"
+        ring = np.stack([(0.36 if polo else 0.385) * np.sin(phi), np.full(len(phi), -1.035),
+                         0.335 * np.cos(phi)], -1)
+        trunk.add(tube(ring, np.full(len(phi), 0.052 if polo else 0.085), trim, sides=8, cap_ends=False, **CLOTH))
+        if polo:                                  # placket down the chest with two buttons
+            ys = np.linspace(-1.08, -1.75, 10)
+            zf = torso.front_z(ys, 0.0, bulk) + 0.004
+            trunk.add(tube(np.column_stack([np.zeros_like(ys), ys, zf]), np.full(len(ys), 0.02), trim, sides=6,
+                           thin=True, **CLOTH))
+            for yb in (-1.30, -1.55):
+                zb = float(torso.front_z(np.array([yb]), 0.0, bulk)[0]) + 0.02
+                trunk.add(ellipsoid((0, yb, zb), (0.03, 0.03, 0.015), (0.95, 0.95, 0.92), detail=10))
+        else:                                     # sweater: ribbed band at the hem
+            a, bf, bb = torso.dims(np.array([hem]), bulk + 0.01)
+            ring = np.stack([a[0] * np.sin(phi), np.full(len(phi), hem + 0.02),
+                             np.where(np.cos(phi) > 0, bf[0], bb[0]) * np.cos(phi)], -1)
+            root.add(tube(ring, np.full(len(phi), 0.055), trim, sides=8, cap_ends=False, **CLOTH))
     if pants == "skirt":
         hem_y = -5.45 if dress else -5.05
         ys = np.linspace(-3.2, hem_y, 16)
@@ -252,8 +284,8 @@ def build_body(v):
 
     # --- arms, hands, sleeves ---------------------------------------------------
     for name, s in (("L", 1), ("R", -1)):
-        ak = arm_keys(s, build, radius, height)
-        legk = leg_keys(s, build, radius, height)
+        ak = arm_keys(s, build, radius, height, shoulders)
+        legk = leg_keys(s, build, radius, height, hips)
         arm, fore, hand = (rig.add_node("arm" + name, ak[0, :3], "torso"),
                            rig.add_node("fore" + name, ak[2, :3], "arm" + name),
                            rig.add_node("hand" + name, ak[4, :3], "fore" + name))
@@ -282,6 +314,13 @@ def build_body(v):
                 fore.add(garment(tube(sl2[:, :3], sl2[:, 3] + grow, tcol, cap_ends=False, **CLOTH)),
                          ellipsoid(ak[2, :3], (ak[2, 3] + grow,) * 3, tcol, **CLOTH).set(joint=True))
             arm.add(garment(ellipsoid(ak[0, :3], (ak[0, 3] + grow,) * 3, tcol, **CLOTH).set(joint=True)))
+            if style == "sweater":                # ribbed cuff at the wrist
+                end = arm_curve(ak, 3, 3.9, 3.95)[-1]
+                ang = np.linspace(0, 2 * math.pi, 20)
+                r_cuff = end[3] + grow + 0.012
+                cuff = np.stack([end[0] + r_cuff * np.cos(ang), np.full(len(ang), end[1]),
+                                 end[2] + r_cuff * np.sin(ang)], -1)
+                fore.add(tube(cuff, np.full(len(ang), 0.035), trim, sides=8, cap_ends=False, **CLOTH))
         if v["watch"] != "none" and s == 1:
             w, r0 = ak[4, :3], ak[4, 3] + 0.03
             a = np.linspace(0, 2 * math.pi, 22)

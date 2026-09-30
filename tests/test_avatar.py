@@ -494,5 +494,104 @@ class LimbShapeTests(unittest.TestCase):
         np.testing.assert_allclose(shaped[:, :3], plain[:, :3])
 
 
+def extent(rig, node, axis):
+    """(min, max) of a node's vertices along an axis (0 = x, 1 = y)."""
+    verts = np.concatenate([m.v for m in rig[node].meshes])
+    return float(verts[:, axis].min()), float(verts[:, axis].max())
+
+
+class ProportionTests(unittest.TestCase):
+    def test_shoulders_and_hips_change_the_silhouette(self):
+        narrow = default_rig(shoulders="Narrow", hips="Narrow")
+        wide = default_rig(shoulders="Wide", hips="Wide")
+        span = lambda rig, node: np.subtract(*extent(rig, node, 0)[::-1])
+        self.assertGreater(span(wide, "torso"), span(narrow, "torso") * 1.1)
+        self.assertGreater(span(wide, "root"), span(narrow, "root") * 1.05)
+
+    def test_head_size_scales_the_head_and_everything_on_it(self):
+        small, large = default_rig(headsize="Small", hair="Short"), default_rig(headsize="Large", hair="Short")
+        height = lambda rig: np.subtract(*extent(rig, "head", 1)[::-1])
+        self.assertGreater(height(large), height(small) * 1.15)
+        base = default_rig(hair="Short")
+        self.assertEqual(len(base["head"].meshes), len(large["head"].meshes))      # nothing lost
+
+    def test_a_long_neck_raises_the_head_and_the_lips_follow(self):
+        short, long_ = default_rig(neck="Short"), default_rig(neck="Long")
+        self.assertGreater(extent(long_, "head", 1)[1], extent(short, "head", 1)[1] + 0.12)
+        lips = lambda rig: np.concatenate([m.v for m in rig["mouth"].meshes])[:, 1].mean()
+        self.assertGreater(lips(long_), lips(short) + 0.12)
+        long_.set_mouth(0.8)                                                        # still follows when talking
+        self.assertGreater(np.concatenate([m.v for m in long_["mouth"].meshes])[:, 1].mean(), lips(short))
+
+    def test_resizing_never_changes_the_cached_shared_meshes(self):
+        a = default_rig(hair="Long")
+        before = extent(a, "head", 1)
+        default_rig(hair="Long", headsize="Large", neck="Long")
+        self.assertEqual(extent(default_rig(hair="Long"), "head", 1), before)
+
+    def test_share_codes_carry_the_new_options_and_old_codes_still_load(self):
+        state = dict(O.DEFAULT_STATE)
+        for key, name in (("shoulders", "Wide"), ("hips", "Narrow"), ("headsize", "Large"), ("neck", "Long")):
+            O.set_by_name(state, key, name)
+        again = dict(O.DEFAULT_STATE)
+        O.decode_state(O.encode_state(state), again)
+        for key in ("shoulders", "hips", "headsize", "neck"):
+            self.assertEqual(again[key], state[key], key)
+        old = O.encode_state(dict(O.DEFAULT_STATE))[:len(O.CODE_PREFIX) + 38]
+        O.decode_state(old, again)                       # 38-option codes from before the proportions
+        self.assertEqual(again["headsize"], O.DEFAULT_STATE["headsize"])
+
+    def test_quality_is_a_view_setting_not_part_of_the_avatar(self):
+        self.assertNotIn("quality", O.CODE_KEYS)
+        self.assertIn("quality", O.NON_BUILD_KEYS)
+
+
+class ClipTests(unittest.TestCase):
+    def test_clips_cover_the_pose_and_every_emote(self):
+        from avatarkit import clips, poses
+        found = clips.all_clips("walk")
+        self.assertEqual(len(found), 1 + len(poses.EMOTES))
+        for name, times, frames in found:
+            self.assertEqual(len(times), len(frames), name)
+            self.assertEqual(times[0], 0.0)
+            self.assertTrue(all(b > a for a, b in zip(times, times[1:])), name)
+
+    def test_animated_glb_has_matching_tracks(self):
+        from avatarkit import clips
+        from avatarkit.exporters import export_skinned
+        rig = default_rig(hair="Bald")
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "a.glb")
+            export_skinned(rig, path, pose_at("relaxed"), clips=clips.all_clips("walk"))
+            data = open(path, "rb").read()
+        doc = json.loads(data[20:20 + struct.unpack("<I", data[12:16])[0]])
+        self.assertEqual(len(doc["animations"]), 10)
+        for anim in doc["animations"]:
+            for ch in anim["channels"]:
+                sampler = anim["samplers"][ch["sampler"]]
+                self.assertEqual(doc["accessors"][sampler["input"]]["count"],
+                                 doc["accessors"][sampler["output"]]["count"])
+                self.assertLess(ch["target"]["node"], len(doc["nodes"]))
+        walk = doc["animations"][0]
+        paths = {ch["target"]["path"] for ch in walk["channels"]}
+        self.assertEqual(paths, {"rotation", "translation"})              # limbs swing, the body bobs
+
+    def test_quaternions_stay_on_one_side_so_playback_never_flips(self):
+        from avatarkit import clips
+        from avatarkit.exporters import _animations, _Buffer
+        rig = default_rig(hair="Bald")
+        buf = _Buffer()
+        index = {n: i for i, n in enumerate(rig.nodes)}
+        out = _animations(buf, rig, index, [clips.pose_clip("dance")], 1.0, np.zeros(3))
+        self.assertTrue(out)
+        for ch, samp in zip(out[0]["channels"], out[0]["samplers"]):
+            if ch["target"]["path"] == "rotation":
+                acc = buf.accessors[samp["output"]]
+                view = buf.views[acc["bufferView"]]
+                q = np.frombuffer(bytes(buf.data[view["byteOffset"]:view["byteOffset"] + view["byteLength"]]),
+                                  np.float32).reshape(-1, 4)
+                self.assertTrue(np.all(np.einsum("ij,ij->i", q[1:], q[:-1]) >= 0))
+
+
 if __name__ == "__main__":
     unittest.main()

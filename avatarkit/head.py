@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 from .mathutil import catmull, gauss, mix, rot_y, smoothstep, unit
-from .mesh import Mesh, cap, ellipsoid, grid_faces, tube
+from .mesh import Mesh, cap, ellipsoid, grid_faces, merge, tube
 
 MOUTH_Y = -0.36
 EYE_X, EYE_Y = 0.20, 0.03
@@ -122,6 +122,17 @@ def eye_meshes(head, side, size, iris, skin, lid_delta=0.0):
     edge = edge[edge[:, 2] > 0.25]
     edge = edge[np.argsort(edge[:, 0])][::4]
     lash = tube(c + edge * r * 1.113, np.full(len(edge), 0.0035), DARK, sides=6)
+    # A few lashes flicking out and up, longest at the outer corner.
+    flicks = []
+    for k in np.linspace(len(edge) * 0.10, len(edge) * 0.90, 7).astype(int):
+        out = edge[k] / np.linalg.norm(edge[k])
+        outer = (edge[k, 0] * side + 1.0) / 2                  # 0 at the nose side .. 1 at the temple
+        length = r * (0.22 + 0.30 * outer)
+        base = c + edge[k] * r * 1.113
+        tip = base + (out * 0.75 + direction * 0.45) * length
+        mid = base + (out * 0.9 + direction * 0.2) * length * 0.5
+        flicks.append(tube(np.array([base, mid, tip]), np.array([0.0028, 0.0020, 0.0008]), DARK, sides=4))
+    lash = merge([lash] + flicks)
     for m in (lid, lash):
         m.anim = ("blink", tuple(c))
     return [ball, lid, lash]

@@ -5,14 +5,16 @@ meshes and drawn with a cel-shading shader and inked outlines. Pick every
 feature from a tabbed side panel, strike a pose, and export the result.
 
 - **Face:** sculpted head (nose, cheekbones, jaw), eyes with a procedural iris,
-  eyelids that blink, lips, six expressions, freckles, glasses, earrings.
+  eyelids and lashes that blink, ears, nostrils, lips with teeth and tongue, six
+  expressions, freckles, glasses, earrings.
 - **Hair:** twelve styles built from thousands of real strands (grown from the
   scalp, clumped into locks, pushed out of the head and shoulders, with
   anisotropic highlights): short, curly, long, bob, bangs, bun, ponytail, quiff,
   mohawk, afro. Beards, moustaches and eyebrows are strands too, hugging the
   skin. Plus hats.
-- **Body:** three body types, build and height, hands with fingers.
-- **Outfit:** tee, long sleeve, tank, hoodie, jacket; jeans, shorts, skirt;
+- **Body:** three body types, build, height, shoulder and hip width, head size and neck
+  length, muscle-shaped arms and legs, hands with fingers.
+- **Outfit:** tee, polo, long sleeve, sweater, tank, hoodie, jacket, dress; jeans, shorts, skirt;
   sneakers, boots or barefoot; stripes, dots, plaid or a chest emblem.
 - **Extras:** necklace, scarf, watch, backpack.
 - **Poses and life:** relaxed, A-pose, wave, hands on hips, cheer, walk and dance,
@@ -36,7 +38,8 @@ python avatar.py
 Or `pip install .` to get an `avatar-studio` command. Optional
 (`requirements-optional.txt`): OpenCV 4 for face detection in the photo import,
 `imageio-ffmpeg` for MP4 clips, and trimesh / scikit-image for extra tests.
-`python build_exe.py` makes a standalone app with PyInstaller.
+`python build_exe.py` makes a standalone app with PyInstaller (`dist/AvatarStudio/`, about
+300 MB; built and launched on Windows only).
 
 ## Saving and your library
 
@@ -118,6 +121,9 @@ Long hair and beards are thinned on export to keep files a sensible size.
 
 - **GLB** keeps the skeleton as glTF nodes so you can repose it in Blender, Unity or Godot.
 - **Skinned GLB** has a real armature (bones, inverse bind matrices, joints and weights).
+- **Animated GLB** is the skinned model plus animations: the current pose's loop (walk and
+  dance are full cycles, other poses idle for four seconds) and the nine emotes, each as its own
+  clip. The bundle's skinned GLB carries the same animations.
 - **VRM 1.0** is a humanoid with the standard bone map, in metres, feet on the ground.
   Expressions/blend shapes are not included yet.
 - **OBJ + MTL** bakes the current pose into one static mesh per part.
@@ -145,12 +151,16 @@ packs are reported at startup and never stop the good ones loading.
   that swings when the head moves (Shadows / Hair physics in the Scene tab).
 - PNG exports and `--bare` screenshots are drawn 3x larger off-screen and shrunk for smooth
   edges; PNG exports are twice the window's pixel size.
+- **Quality** (Scene tab): High, Balanced or Fast. Lower settings draw fewer hair strands, use a
+  smaller shadow filter and drop ambient occlusion, for slower graphics cards. Exported pictures
+  always use the best quality. `python tests/bench_gui.py` prints frame times for each setting.
 
 ## Not done yet
 
-Neural/offline TTS, microphone input, BVH import, VRM expressions, landmark-based photo
-matching, a virtual webcam, screen-space ambient occlusion (the current one is a soft overhead shadow), and testing on macOS/Linux (only Windows
-has been tried).
+Neural/offline TTS, microphone input, BVH import, VRM expressions (blend shapes), landmark-based
+photo matching, a virtual webcam, and true screen-space ambient occlusion (the current one is a
+soft overhead shadow). Automated tests run on Windows, macOS and Linux CI, but the interactive
+window has only been used on Windows.
 
 ## Photo import
 

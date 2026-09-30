@@ -2,3 +2,6 @@ __pycache__/
 exports/
 avatar.json
 *.pyc
+build/
+dist/
+*.spec

@@ -8,6 +8,7 @@ from . import strands as strands_mod
 from . import head as head_mod
 from .body import build_body, neck_mesh
 from .mathutil import mix
+from .mesh import transformed
 
 _hair = functools.lru_cache(maxsize=16)(hair_mod.hair_meshes)
 _hat = functools.lru_cache(maxsize=16)(hair_mod.hat_meshes)
@@ -27,7 +28,7 @@ def build_avatar(v):
     for node in rig.nodes.values():
         for m in node.meshes:
             m.outlined()
-    rig["torso"].add(neck_mesh(skin).outlined())
+    rig["torso"].add(neck_mesh(skin, v["neck"]).outlined())
 
     head = head_mod.cached_head(skin, v["face"], v["nose"])
     head.mesh.freckle = float(v["freckles"])
@@ -66,4 +67,21 @@ def build_avatar(v):
         node.add(_glasses(head, v["glasses"]))
     if v["headphones"]:
         node.add(hair_mod.headphone_meshes(tuple(v["hatcolor"])))
+    apply_head_proportions(rig, node.pivot, v["headsize"], v["neck"])
     return rig
+
+
+def apply_head_proportions(rig, origin, scale, lift):
+    """Resize the head about the neck and raise it (a longer neck). Works on copies: the head parts
+    are cached and shared between avatars."""
+    if scale == 1.0 and lift == 0.0:
+        return
+    shift = np.array([0.0, lift, 0.0])
+    for name in ("head", "brows", "browL", "browR"):
+        node = rig[name]
+        node.meshes = [transformed(m, scale, origin, shift) for m in node.meshes]
+        if name != "head":                                   # rotation pivots of the parts inside the head
+            node.pivot = (node.pivot - origin) * scale + origin + shift
+    rig.head_fx = (scale, np.asarray(origin, float), shift)
+    rig._mouth_key = None                                    # re-place the lips that were already set
+    rig.set_mouth(0.0)

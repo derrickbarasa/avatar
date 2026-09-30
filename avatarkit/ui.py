@@ -47,7 +47,7 @@ PHRASES = [
 LABELS = {"__say": "SAY SOMETHING", "__phrases": "QUICK PHRASES", "__name": "AVATAR NAME",
           "__mine": "MY AVATARS", "__export": "EXPORT / DOWNLOAD", "__edit": "EDIT", "__emotes": "EMOTES"}
 EXPORTS = [("png", "PNG"), ("transparent", "Transparent PNG"), ("glb", "GLB"), ("skinned", "Skinned GLB"),
-           ("vrm", "VRM"), ("obj", "OBJ"), ("bundle", "Bundle .zip"), ("clip", "Talking clip")]
+           ("animated", "Animated GLB"), ("vrm", "VRM"), ("obj", "OBJ"), ("bundle", "Bundle .zip"), ("clip", "Talking clip")]
 
 
 @dataclass

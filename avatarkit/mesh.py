@@ -50,6 +50,7 @@ class Mesh:
         self.n_strands, self.faces_per_strand = 0, 0
         self.strand_aux, self.swing = None, 0.0   # per-vertex (radius, t along strand); sway amount 0..1
         self.jaw_follow = False                    # moves with the jaw when the mouth opens
+        self.jaw_shift = 0.0                       # how far the head was moved (keeps the jaw region right)
 
     def outlined(self):
         self.outline = not (self.joint or self.strand)
@@ -71,6 +72,25 @@ def strand_faces(mesh, fraction=1.0):
         return mesh.f
     keep = max(1, int(mesh.n_strands * fraction))
     return mesh.f[:keep * mesh.faces_per_strand * 3]
+
+
+def transformed(mesh, scale, origin, shift):
+    """A copy of `mesh` scaled about `origin` then moved by `shift` (the original is left alone: many
+    meshes are cached and shared between avatars)."""
+    o, sh = np.asarray(origin, np.float32), np.asarray(shift, np.float32)
+    out = Mesh.__new__(Mesh)
+    out.__dict__.update(mesh.__dict__)
+    out.v = np.ascontiguousarray((mesh.v - o) * scale + o + sh, np.float32)
+    if mesh.strand_aux is not None:
+        aux = mesh.strand_aux.copy()
+        aux[:, 0] *= scale
+        out.strand_aux = aux
+    move = lambda p: tuple(float(x) for x in (np.asarray(p, np.float32) - o) * scale + o + sh)
+    out.center = move(mesh.center)
+    if mesh.anim:
+        out.anim = (mesh.anim[0], move(mesh.anim[1]))
+    out.jaw_shift = mesh.jaw_shift + float(sh[1])
+    return out
 
 
 def merge(meshes, color=None):

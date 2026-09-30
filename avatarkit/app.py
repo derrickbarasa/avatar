@@ -12,7 +12,7 @@ import pygame
 from . import options as O
 from . import packs, recorder
 from . import speech as speech_mod
-from . import store, tts
+from . import clips, store, tts
 from .builder import build_avatar
 from .exporters import export_glb, export_obj, export_skinned, export_vrm
 from .history import History
@@ -27,6 +27,7 @@ PACK_MESSAGES = ([], [])            # (loaded summaries, errors) from the packs 
 MIN_SIZE = (900, 560)
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp")
 MODEL_EXPORTS = {"glb": (".glb", "GLB"), "skinned": ("_skinned.glb", "Skinned GLB"),
+                 "animated": ("_animated.glb", "Animated GLB"),
                  "vrm": (".vrm", "VRM"), "obj": (".obj", "OBJ")}
 
 
@@ -85,7 +86,8 @@ def clipboard_put(text):
 
 def open_window(size):
     pygame.init()
-    for samples in (8, 4, 0):                     # smoothest edges the graphics card allows
+    wanted = int(os.environ.get("AVATARKIT_MSAA", "8"))     # 0, 2, 4 or 8 samples per pixel
+    for samples in [s for s in (8, 4, 2, 0) if s <= wanted]:  # smoothest edges the graphics card allows
         for attr, val in ((pygame.GL_MULTISAMPLEBUFFERS, 1 if samples else 0), (pygame.GL_MULTISAMPLESAMPLES, samples),
                           (pygame.GL_ALPHA_SIZE, 8), (pygame.GL_DEPTH_SIZE, 24)):  # 16-bit depth z-fights clothes
             pygame.display.gl_set_attribute(attr, val)
@@ -319,6 +321,9 @@ class App:
             export_glb(self.rig, path, pose, strand_fraction=0.5)
         elif kind == "skinned":
             export_skinned(self.rig, path, pose, name=name, strand_fraction=0.5)
+        elif kind == "animated":
+            export_skinned(self.rig, path, pose, name=name, strand_fraction=0.5,
+                           clips=clips.all_clips(O.resolve(self.state)["pose"]))
         elif kind == "vrm":
             export_vrm(self.rig, path, pose, name=name)
         else:
@@ -338,7 +343,9 @@ class App:
                 files[arc] = p
 
             add(base + ".glb", lambda p: export_glb(self.rig, p, pose, strand_fraction=0.5))
-            add(base + "_skinned.glb", lambda p: export_skinned(self.rig, p, pose, name=name, strand_fraction=0.5))
+            add(base + "_skinned.glb", lambda p: export_skinned(
+                self.rig, p, pose, name=name, strand_fraction=0.5,
+                clips=clips.all_clips(O.resolve(self.state)["pose"])))       # bones + the pose loop and emotes
             add(base + ".vrm", lambda p: export_vrm(self.rig, p, pose, name=name))
             add(base + ".obj", lambda p: export_obj(self.rig, p, pose, strand_fraction=0.4))
             files[base + ".mtl"] = os.path.join(tmp, base + ".mtl")
@@ -357,7 +364,7 @@ class App:
             # pictures are drawn 3x larger off-screen and shrunk: clean edges, and 2x the window's pixels
             shot = lambda alpha=False: self.renderer.capture(
                 self.rig, pose, self.cam, bg, size, view, scale=2, supersample=3, alpha=alpha, blink=blink,
-                gaze=gaze, lid=lid, reserved=RESERVED, **self.look())
+                gaze=gaze, lid=lid, reserved=RESERVED, **dict(self.look(), quality=1.0))   # pictures: always best
             if kind == "png":
                 path = self.out_path(".png")
                 pygame.image.save(shot(), path)
@@ -560,7 +567,8 @@ class App:
 
     def look(self):
         """Extra draw parameters: jaw drop, hair sway and whether shadows are on."""
-        return {"jaw": self.jaw, "swing": self.hair.swing, "shadows": O.resolve(self.state)["shadows"]}
+        r = O.resolve(self.state)
+        return {"jaw": self.jaw, "swing": self.hair.swing, "shadows": r["shadows"], "quality": r["quality"]}
 
     def live_state(self, t):
         speech = tt = emote = None
@@ -904,7 +912,8 @@ class App:
                 pose, blink, gaze, lid = self.live_state(t)
                 surf = self.renderer.capture(
                     self.rig, pose, self.cam, O.resolve(self.state)["bg"], (w, h), view, scale=1, supersample=3,
-                    alpha=args.transparent, blink=blink, gaze=gaze, lid=lid, reserved=RESERVED, **self.look())
+                    alpha=args.transparent, blink=blink, gaze=gaze, lid=lid, reserved=RESERVED,
+                    **dict(self.look(), quality=1.0))
             else:
                 surf = self.renderer.grab((w, h))              # the window as you see it, card included
             pygame.image.save(surf, args.shot)
@@ -969,7 +978,7 @@ def parse_args(argv=None):
     ap.add_argument("--name", help="avatar name used for saving and file names")
     ap.add_argument("--save", metavar="NAME", help="save the avatar to your library (with --shot / --export)")
     ap.add_argument("--export", action="append", default=[], metavar="KIND",
-                    choices=["png", "transparent", "glb", "skinned", "vrm", "obj", "bundle"],
+                    choices=["png", "transparent", "glb", "skinned", "animated", "vrm", "obj", "bundle"],
                     help="write an export and exit (repeatable): png transparent glb skinned vrm obj bundle")
     ap.add_argument("--clip", metavar="FILE", help="render the --say line to an .mp4 (or .gif) and exit")
     ap.add_argument("--out", help="folder for exports (default: your library's exports folder)")

@@ -298,6 +298,20 @@ class NewContentTests(unittest.TestCase):
         low = min(m.v[:, 1].min() for m in rig["root"].meshes if m.kind == "cloth")
         self.assertLess(low, -5.0)                               # reaches below the knee
 
+    def test_polo_and_sweater_add_trim_to_the_tee_and_long_sleeve_cuts(self):
+        tee, long_ = len(default_rig(top="T-shirt")["torso"].meshes), len(default_rig(top="Long sleeve")["torso"].meshes)
+        polo, sweater = default_rig(top="Polo"), default_rig(top="Sweater")
+        self.assertGreater(len(polo["torso"].meshes), tee + 2)             # collar, placket, buttons
+        self.assertGreater(len(sweater["torso"].meshes), long_)             # collar
+        self.assertGreater(len(sweater["forearmL" if "forearmL" in sweater.nodes else "foreL"].meshes),
+                           len(default_rig(top="Long sleeve")["foreL"].meshes))   # cuff
+
+    def test_eyes_have_lash_flicks(self):
+        eye = default_rig()["head"].meshes
+        lashes = [m for m in eye if m.anim and m.anim[0] == "blink" and m.kind == "plain"]
+        self.assertTrue(lashes)
+        self.assertGreater(max(len(m.v) for m in lashes), 240)              # the lash line plus the flicks
+
     def test_neckwear_adds_pieces_to_the_torso(self):
         base = len(default_rig()["torso"].meshes)
         self.assertGreater(len(default_rig(neckwear="Bow tie")["torso"].meshes), base)
@@ -314,7 +328,7 @@ class NewContentTests(unittest.TestCase):
         self.assertEqual(O.resolve(out)["hair"], "afro")
         self.assertEqual(O.resolve(out)["neckwear"], "none")
         with self.assertRaises(ValueError):
-            O.decode_state(code[:-4], out)                      # shorter than any code ever issued
+            O.decode_state(code[:len(O.CODE_PREFIX) + O.LEGACY_CODE_LEN - 1], out)   # shorter than any issued
 
 
 class TalkTabTests(unittest.TestCase):

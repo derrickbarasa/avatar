@@ -2,6 +2,7 @@
 import numpy as np
 
 from .mathutil import euler_matrix
+from .mesh import transformed
 
 
 class Node:
@@ -33,6 +34,8 @@ class Rig:
         self.mouth = None          # head.Mouth, set by the builder
         self.base_open = 0.0       # resting openness from the chosen expression
         self._mouth_key = None
+        self.head_fx = None        # (scale, origin, shift) applied to the head parts, or None
+        self._fx_cache = {}
 
     def add_node(self, name, pivot, parent=None):
         node = Node(name, pivot, self.nodes[parent] if parent else None)
@@ -47,8 +50,13 @@ class Rig:
             return
         meshes = self.mouth.meshes(min(1.0, self.base_open + open_), wide, press, smile)
         if meshes is not self._mouth_key:
-            self.nodes["mouth"].meshes = meshes
             self._mouth_key = meshes
+            if self.head_fx is not None:                    # a resized / raised head: move the lips along
+                hit = self._fx_cache.get(id(meshes))
+                if hit is None:
+                    hit = self._fx_cache[id(meshes)] = (meshes, [transformed(m, *self.head_fx) for m in meshes])
+                meshes = hit[1]
+            self.nodes["mouth"].meshes = meshes
 
     def __getitem__(self, name):
         return self.nodes[name]
