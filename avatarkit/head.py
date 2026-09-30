@@ -113,12 +113,12 @@ def eye_meshes(head, side, size, iris, skin, lid_delta=0.0):
     return [ball, lid, lash]
 
 
-def brow_mesh(head, side, thickness, color, dy=0.0, tilt=0.0):
+def brow_mesh(head, side, thickness, color, dy=0.0, tilt=0.0, scale=1.0):
     t = np.linspace(0, 1, 14)
     xs = side * (0.075 + 0.20 * t)
     ys = 0.185 + 0.045 * np.sin(t * math.pi * 0.85) - 0.02 * t
     ys = ys + dy - tilt * 0.05 * (1 - t) + tilt * 0.02 * t
-    radii = 0.016 * thickness * (1.1 - 0.65 * t) * np.minimum(1, 0.3 + 6 * np.minimum(t, 1 - t))
+    radii = scale * 0.016 * thickness * (1.1 - 0.65 * t) * np.minimum(1, 0.3 + 6 * np.minimum(t, 1 - t))
     return tube(head.on_face(xs, ys, 0.004), radii, color, sides=8, shine=10, spec=0.02, kind="hair")
 
 

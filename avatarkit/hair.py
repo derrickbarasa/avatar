@@ -6,7 +6,7 @@ import numpy as np
 from .head import MOUTH_Y
 from .mathutil import catmull, mix, rot_x, smoothstep
 from .mesh import Mesh, ellipsoid, grid_faces, tube, unit_sphere_z
-from .strands import strand_meshes
+from .strands import facial_strand_meshes, mustache_margin, strand_meshes
 
 HAIR = dict(shine=40, spec=0.25, kind="hair")
 
@@ -115,21 +115,18 @@ def hair_curtain(color, length):
 
 
 def facial_hair_meshes(head, style, color):
+    """Moustache and beard grown as strands over a thin, darker skin-tone layer."""
     if style == "none":
         return []
-    hair = dict(shine=30, spec=0.15, kind="hair")
+    beard = style == "beard"
+    dark = mix(color, (0, 0, 0), 0.4)
+    margin = np.full(head.Y.shape, -1.0)
     out = []
-    xs = np.linspace(0, 1, 12)
-    for s in (-1, 1):
-        x = s * 0.17 * xs
-        y = -0.285 - 0.02 * xs
-        radii = 0.030 * (1 - 0.6 * xs) * np.minimum(1, 0.3 + 6 * (1 - xs))
-        out.append(tube(head.on_face(x, y, 0.012), radii, color, sides=8, **hair))
-    if style == "beard":
+    if beard:
         theta = np.abs(np.arctan2(head.X, head.Z))
         jaw = np.minimum(-0.22 - head.Y, (np.radians(85) - theta) * 0.5)
         mouth = np.sqrt((head.X / 0.19) ** 2 + ((head.Y - MOUTH_Y) / 0.065) ** 2) - 1
-        margin = np.minimum(jaw, mouth * 0.15)
-        margin = np.where(head.Y > -0.22, -1.0, margin)
-        out.append(head.shell(margin, 0.04, color, 0.05, **hair))
-    return out
+        margin = np.where(head.Y > -0.22, -1.0, np.minimum(jaw, mouth * 0.15))
+        out.append(head.shell(margin * 0.35, 0.03, dark, 0.03, **HAIR))   # soft top edge
+    out.append(head.shell(mustache_margin(head), 0.010, dark, 0.3, **HAIR))
+    return out + facial_strand_meshes(head, margin, color, beard)

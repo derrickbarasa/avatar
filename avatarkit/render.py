@@ -242,7 +242,9 @@ class Renderer:
         glLightfv(GL_LIGHT2, GL_POSITION, (0.2, 0.5, -1.0, 0.0))
 
     # ---- scene ---------------------------------------------------------------
-    def draw_scene(self, rig, pose, cam, bg, size, blink=0.0, transparent=False):
+    def draw_scene(self, rig, pose, cam, bg, size, blink=0.0, transparent=False, reserved=0):
+        """Draw into the whole window; `reserved` px on the right (the UI card) are kept free by
+        shifting the lens, so the avatar stays centred in the remaining area."""
         w, h = size
         self.view_h = float(h)
         self.blink = blink
@@ -254,6 +256,7 @@ class Renderer:
         glClear(GL_DEPTH_BUFFER_BIT)
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
+        glTranslatef(-reserved / max(w, 1), 0.0, 0.0)
         gluPerspective(FOV, w / max(h, 1), 0.5, 80)
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()

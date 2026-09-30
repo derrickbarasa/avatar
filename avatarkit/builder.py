@@ -4,6 +4,7 @@ import functools
 import numpy as np
 
 from . import hair as hair_mod
+from . import strands as strands_mod
 from . import head as head_mod
 from .body import build_body, neck_mesh
 from .mathutil import mix
@@ -12,6 +13,7 @@ _hair = functools.lru_cache(maxsize=16)(hair_mod.hair_meshes)
 _hat = functools.lru_cache(maxsize=16)(hair_mod.hat_meshes)
 _facial = functools.lru_cache(maxsize=16)(hair_mod.facial_hair_meshes)
 _glasses = functools.lru_cache(maxsize=8)(head_mod.glasses_meshes)
+_brows = functools.lru_cache(maxsize=16)(strands_mod.brow_strand_meshes)
 
 
 def build_avatar(v):
@@ -31,12 +33,14 @@ def build_avatar(v):
     head.mesh.freckle = float(v["freckles"])
     node = rig.add_node("head", (0.0, -0.55, 0.03), "torso")
     node.add(head.mesh.outlined())
+    brow_color = mix(hair, head_mod.DARK, 0.25)
     for s in (-1, 1):
         node.add(head_mod.eye_meshes(head, s, v["eyesize"], v["eyes"], skin,
                                      lid_l if s > 0 else lid_r))
-        node.add(head_mod.brow_mesh(head, s, v["brows"], mix(hair, head_mod.DARK, 0.25),
-                                    brow_dy, brow_tilt))
+        node.add(head_mod.brow_mesh(head, s, v["brows"], brow_color, brow_dy, brow_tilt,
+                                    scale=0.5))   # thin base under the brow hairs
         node.add(head_mod.ear_meshes(s, skin))
+    node.add(_brows(head, v["brows"], brow_color, brow_dy, brow_tilt))
     node.add(head_mod.lip_meshes(head, smile, mouth_w, skin, e_open))
     node.add(head_mod.earring_meshes(v["earrings"]))
 

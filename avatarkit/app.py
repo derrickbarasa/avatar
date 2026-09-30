@@ -14,7 +14,7 @@ from .exporters import export_glb, export_obj
 from .photo import apply_photo
 from .poses import blink_angle, pose_at
 from .render import Camera, Renderer
-from .ui import PANEL_W, Panel
+from .ui import RESERVED, UI, UIModel
 
 EXPORT_DIR = "exports"
 VIEW_ORDER = ["bust", "face", "full"]
@@ -99,7 +99,8 @@ class App:
     def __init__(self, args):
         open_window(args.size)
         self.args = args
-        self.renderer, self.panel = Renderer(), Panel()
+        self.renderer, self.ui = Renderer(), UI()
+        self.help, self.ui_key = False, None
         self.state = dict(O.DEFAULT_STATE)
         self.setup_state(args)
         self.cam = Camera(args.view)
@@ -137,10 +138,12 @@ class App:
         self.message, self.message_until, self.dirty = text, time.time() + 4, True
 
     def change(self, key, step):
-        n = len(O.choices(key))
-        self.state[key] = (self.state[key] + step) % n
+        self.set_value(key, (self.state[key] + step) % len(O.choices(key)))
+
+    def set_value(self, key, idx):
+        self.state[key] = idx
         if key == "preset":
-            O.apply_preset(self.state, O.choices("preset")[self.state["preset"]][0])
+            O.apply_preset(self.state, O.choices("preset")[idx][0])
         if key not in O.NON_BUILD_KEYS or key == "preset":
             self.rebuild()
         self.dirty = True
@@ -163,7 +166,7 @@ class App:
         pose, _ = self.current_pose(t)
         path = stamp("." + kind)
         (export_glb if kind == "glb" else export_obj)(self.rig, path, pose)
-        self.notify(f"Exported {path}")
+        self.notify(f"Exported {os.path.basename(path)}")
 
     def choose_photo(self):
         path = pick_file()
@@ -204,13 +207,20 @@ class App:
         ctrl, shift = mods & pygame.KMOD_CTRL, mods & pygame.KMOD_SHIFT
         k = e.key
         if k == pygame.K_ESCAPE:
+            if self.help:
+                self.help, self.dirty = False, True
+                return True
             return False
-        if k == pygame.K_TAB:
+        if k in (pygame.K_h, pygame.K_F1):
+            self.help, self.dirty = not self.help, True
+        elif k == pygame.K_TAB:
             self.set_tab(self.tab + (-1 if shift else 1))
         elif k == pygame.K_UP:
             self.row, self.dirty = (self.row - 1) % len(self.rows()), True
+            self.ui.focus_changed()
         elif k == pygame.K_DOWN:
             self.row, self.dirty = (self.row + 1) % len(self.rows()), True
+            self.ui.focus_changed()
         elif k in (pygame.K_LEFT, pygame.K_RIGHT):
             self.change(self.rows()[self.row], -1 if k == pygame.K_LEFT else 1)
         elif k == pygame.K_v and ctrl:
@@ -219,8 +229,9 @@ class App:
             self.randomize()
         elif k == pygame.K_v:
             self.cam.set_view(VIEW_ORDER[(VIEW_ORDER.index(self.cam.view) + 1) % 3])
+            self.dirty = True
         elif k == pygame.K_SPACE:
-            self.spin = not self.spin
+            self.spin, self.dirty = not self.spin, True
         elif k == pygame.K_s:
             self.save_png(False)
         elif k == pygame.K_g:
@@ -248,18 +259,27 @@ class App:
 
     def on_click(self, pos):
         w, h = self.size()
-        if pos[0] < w - PANEL_W:
-            self.dragging, self.spin = True, False
+        if self.help:
+            self.help, self.dirty = False, True
             return
-        hit = self.panel.hit(pos[0] - (w - PANEL_W), pos[1], self.tab, h)
-        if not hit:
+        hit = self.ui.hit(pos)
+        if hit is None:
+            if pos[0] < w - RESERVED:
+                self.dragging, self.spin, self.dirty = True, False, True
             return
-        if hit[0] == "tab":
+        kind = hit[0]
+        if kind == "tab":
             self.set_tab(hit[1])
-        elif hit[0] == "row":
-            self.row, self.dirty = hit[1], True
-            if hit[2]:
-                self.change(self.rows()[hit[1]], hit[2])
+        elif kind == "choose":
+            self.row = self.rows().index(hit[1]) if hit[1] in self.rows() else self.row
+            self.set_value(hit[1], hit[2])
+        elif kind == "view":
+            self.cam.set_view(hit[1])
+            self.dirty = True
+        elif kind == "toggle":
+            self.spin, self.dirty = not self.spin, True
+        elif kind == "copy":
+            self.copy_code()
         elif hit[1] == "random":
             self.randomize()
         elif hit[1] == "photo":
@@ -278,11 +298,14 @@ class App:
             self.on_click(e.pos)
         elif e.type == pygame.MOUSEBUTTONUP and e.button == 1:
             self.dragging = False
-        elif e.type == pygame.MOUSEMOTION and self.dragging:
-            self.cam.yaw += e.rel[0] * 0.5
-            self.cam.pitch = max(-60, min(60, self.cam.pitch + e.rel[1] * 0.4))
+        elif e.type == pygame.MOUSEMOTION:
+            self.ui.hover(e.pos)
+            if self.dragging:
+                self.cam.yaw += e.rel[0] * 0.5
+                self.cam.pitch = max(-60, min(60, self.cam.pitch + e.rel[1] * 0.4))
         elif e.type == pygame.MOUSEWHEEL:
-            self.cam.zoom(e.y)
+            if not self.ui.scroll_by(e.y, pygame.mouse.get_pos()):
+                self.cam.zoom(e.y)
         elif e.type == pygame.VIDEORESIZE:
             self.dirty = True
         return True
@@ -293,29 +316,35 @@ class App:
 
     def draw(self):
         w, h = self.size()
-        view = (w - PANEL_W, h)
+        view = (w - RESERVED, h)
         t = self.clock_time()
         pose, blink = self.current_pose(t)
         bg = O.resolve(self.state)["bg"]
         if self.spin:
             self.cam.yaw += 0.4
         self.cam.update(self.rig.ground_y)
-        self.renderer.draw_scene(self.rig, pose, self.cam, bg, view, blink)
+        self.renderer.draw_scene(self.rig, pose, self.cam, bg, (w, h), blink, reserved=RESERVED)
         if self.want:
             transparent = self.want == "transparent"
             if transparent:
-                self.renderer.draw_scene(self.rig, pose, self.cam, bg, view, blink, transparent=True)
+                self.renderer.draw_scene(self.rig, pose, self.cam, bg, (w, h), blink, transparent=True,
+                                         reserved=RESERVED)
             path = stamp(".png")
             pygame.image.save(self.renderer.grab(view, alpha=transparent), path)
             self.want = None
-            self.notify(f"Saved {path}")
-        if self.message and time.time() > self.message_until:
-            self.message, self.dirty = "", True
-        if self.dirty or self.panel.height != h:
-            self.panel.render(self.state, self.tab, self.row, self.message,
-                              O.encode_state(self.state), h)
-            self.dirty = False
-        self.panel.draw((w, h))
+            self.notify(f"Saved {os.path.basename(path)}")
+        left = self.message_until - time.time()
+        if self.message and left <= 0:
+            self.message = ""
+        alpha = 0.0 if not self.message else min(1.0, left / 0.5)
+        model = UIModel(self.state, self.tab, self.row, O.encode_state(self.state), self.cam.view,
+                        self.spin, self.message, alpha, self.help)
+        key = (self.tab, self.row, self.cam.view, self.spin, self.message, round(alpha, 2),
+               self.help, (w, h), tuple(self.state.values()))
+        if key != self.ui_key or self.ui.dirty:
+            self.ui.render(model, (w, h))
+            self.ui_key = key
+        self.ui.draw((w, h))
         return view
 
     def run(self):
@@ -339,8 +368,8 @@ class App:
             t = self.clock_time()
             pose, blink = self.current_pose(t)
             bg = O.resolve(self.state)["bg"]
-            self.renderer.draw_scene(self.rig, pose, self.cam, bg, view, blink,
-                                     transparent=self.args.transparent)
+            self.renderer.draw_scene(self.rig, pose, self.cam, bg, (w, h), blink,
+                                     transparent=self.args.transparent, reserved=RESERVED)
             surf = self.renderer.grab(view, alpha=self.args.transparent)
         else:
             surf = self.renderer.grab((w, h))
@@ -353,7 +382,7 @@ def make_sheet(args):
     open_window(args.size)
     renderer = Renderer()
     w, h = args.size
-    view = (w - PANEL_W, h)
+    view = (w - RESERVED, h)
     n = args.sheet
     cols = math.ceil(math.sqrt(n))
     rows = math.ceil(n / cols)
@@ -369,7 +398,7 @@ def make_sheet(args):
         cam.yaw = args.yaw
         for _ in range(80):
             cam.update(rig.ground_y)
-        renderer.draw_scene(rig, pose_at("relaxed", 0.0, False), cam, bg, view)
+        renderer.draw_scene(rig, pose_at("relaxed", 0.0, False), cam, bg, (w, h), reserved=RESERVED)
         thumb = pygame.transform.smoothscale(renderer.grab(view), (cw, ch))
         sheet.blit(thumb, ((i % cols) * cw, (i // cols) * ch))
         pygame.display.flip()

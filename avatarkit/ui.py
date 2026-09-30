@@ -1,110 +1,424 @@
-"""The customizer side panel: tabs, option rows and buttons, drawn with pygame
-onto a texture and hit-tested by the app."""
+"""The interface: a floating side card with tabs, colour swatches and option chips,
+a view switcher over the 3D scene, toasts and a shortcut sheet.
+
+Everything is drawn with pygame onto one transparent overlay that is uploaded
+as a texture. `UI.render` builds the overlay (no OpenGL needed, so it can be
+tested); `UI.draw` uploads and composites it.
+"""
+import functools
+import os
+from dataclasses import dataclass, field
+
 import pygame
-from OpenGL.GL import *  # noqa: F401,F403
 
 from . import options as O
 
-PANEL_W = 320
-TAB_Y, TAB_H = 44, 26
-ROW0, ROW_H = 84, 26
-BUTTONS = [("Random", "random"), ("Photo", "photo"), ("PNG", "png"), ("GLB", "glb")]
-BG = (26, 28, 36)
-ACCENT = (86, 130, 255)
+PANEL_W = 340
+MARGIN = 14
+RESERVED = PANEL_W + 2 * MARGIN          # width taken from the 3D view
+
+COL = dict(
+    panel=(24, 26, 36), panel2=(33, 36, 50), chip=(43, 47, 65), chip_hover=(58, 63, 87),
+    line=(47, 51, 68), text=(238, 240, 248), muted=(146, 152, 175), faint=(104, 110, 134),
+    accent=(99, 102, 241), accent_hover=(122, 125, 255), ok=(94, 214, 158),
+)
+VIEWS = [("bust", "Bust"), ("face", "Face"), ("full", "Full")]
+SHORTCUTS = [
+    ("Tab / Shift+Tab", "switch tab"), ("↑ ↓  ← →", "focus option / change it"),
+    ("R", "randomize"), ("[  ]", "previous / next outfit preset"),
+    ("V", "cycle view"), ("Space", "toggle spin"), ("Drag / wheel", "orbit / zoom"),
+    ("S / G", "save PNG / transparent PNG"), ("E / O", "export GLB / OBJ"),
+    ("C / Ctrl+V", "copy / paste share code"), ("P", "import from a photo"),
+    ("K / L", "save / load avatar.json"), ("H", "show or hide this sheet"),
+]
 
 
-def _fonts():
-    names = "segoeui,arial,helvetica"
-    return (pygame.font.SysFont(names, 15), pygame.font.SysFont(names, 21, bold=True),
-            pygame.font.SysFont(names, 12), pygame.font.SysFont(names, 13, bold=True))
+@dataclass
+class UIModel:
+    state: dict
+    tab: int = 0
+    focus: int = 0
+    code: str = ""
+    view: str = "bust"
+    spin: bool = False
+    toast: str = ""
+    toast_alpha: float = 0.0
+    help: bool = False
 
 
-class Panel:
+# ---------------------------------------------------------------------------
+# Fonts and cached, anti-aliased shapes
+# ---------------------------------------------------------------------------
+def _font(bold, size):
+    win = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    names = (("seguisb.ttf", "segoeuib.ttf", "arialbd.ttf") if bold
+             else ("SegUIVar.ttf", "segoeui.ttf", "arial.ttf"))
+    for n in names:
+        path = os.path.join(win, n)
+        if os.path.exists(path):
+            return pygame.font.Font(path, size)
+    return pygame.font.SysFont("segoeui,arial,helvetica,sans", size, bold=bold)
+
+
+@functools.lru_cache(maxsize=None)
+def font(bold, size):
+    pygame.font.init()
+    return _font(bold, size)
+
+
+@functools.lru_cache(maxsize=1024)
+def text(s, bold, size, color):
+    return font(bold, size).render(s, True, color)
+
+
+def text_width(s, bold, size):
+    return font(bold, size).size(s)[0]
+
+
+@functools.lru_cache(maxsize=512)
+def pill(w, h, r, color, ring=None, ring_w=2):
+    """Anti-aliased rounded rectangle (drawn 4x and scaled down)."""
+    s = 4
+    surf = pygame.Surface((w * s, h * s), pygame.SRCALPHA)
+    pygame.draw.rect(surf, color, (0, 0, w * s, h * s), border_radius=r * s)
+    if ring:
+        pygame.draw.rect(surf, ring, (0, 0, w * s, h * s), width=ring_w * s, border_radius=r * s)
+    return pygame.transform.smoothscale(surf, (w, h))
+
+
+@functools.lru_cache(maxsize=256)
+def disc(d, color, ring=None, ring_w=3):
+    s = 4
+    surf = pygame.Surface((d * s, d * s), pygame.SRCALPHA)
+    pygame.draw.circle(surf, color, (d * s // 2, d * s // 2), d * s // 2)
+    if ring:
+        pygame.draw.circle(surf, ring, (d * s // 2, d * s // 2), d * s // 2, width=ring_w * s)
+    return pygame.transform.smoothscale(surf, (d, d))
+
+
+@functools.lru_cache(maxsize=16)
+def shadow(w, h, r, spread=26):
+    """Soft drop shadow: a small blurred-by-upscaling rounded rect."""
+    k = 4
+    small = pygame.Surface(((w + 2 * spread) // k + 1, (h + 2 * spread) // k + 1), pygame.SRCALPHA)
+    pygame.draw.rect(small, (0, 0, 0, 120), (spread // k, spread // k, w // k, h // k),
+                     border_radius=max(1, r // k))
+    return pygame.transform.smoothscale(small, (w + 2 * spread, h + 2 * spread))
+
+
+@functools.lru_cache(maxsize=16)
+def fade(w, h, color, top):
+    """Vertical gradient from `color` to transparent (used to soften scrolled content)."""
+    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    for y in range(h):
+        a = int(255 * (1 - y / h) ** 1.5) if top else int(255 * (y / h) ** 1.5)
+        pygame.draw.line(surf, color + (a,), (0, y), (w, y))
+    return surf
+
+
+def rgb(c):
+    return tuple(int(round(x * 255)) for x in c)
+
+
+# ---------------------------------------------------------------------------
+class UI:
     def __init__(self):
-        self.font, self.title, self.small, self.tab_font = _fonts()
-        self.tex = glGenTextures(1)
-        glBindTexture(GL_TEXTURE_2D, self.tex)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        self.height = 0
+        self.widgets = []            # (rect, action) in window coordinates
+        self.mouse = (-1, -1)
+        self.hover_action = None
+        self.scroll = {}
+        self.focus_key = None
+        self.surface = None
+        self.dirty = True
+        self.tex = None
+        self.tex_size = None
+        self.panel_rect = pygame.Rect(0, 0, 0, 0)
+        self.uploaded = False
+        self.tab = 0
+        self.max_scroll = 0
 
-    # ---- layout ---------------------------------------------------------------
-    @staticmethod
-    def tab_rect(i):
-        w = (PANEL_W - 16) / len(O.TABS)
-        return pygame.Rect(8 + int(i * w), TAB_Y, int(w) - 2, TAB_H)
-
-    @staticmethod
-    def row_rect(i):
-        return pygame.Rect(6, ROW0 + i * ROW_H, PANEL_W - 12, ROW_H - 2)
-
-    @staticmethod
-    def button_rects(height):
-        w = (PANEL_W - 16 - 3 * 6) // len(BUTTONS)
-        return [pygame.Rect(8 + i * (w + 6), height - 122, w, 28) for i in range(len(BUTTONS))]
-
-    def hit(self, x, y, tab, height):
-        """Translate a click at panel coordinates into an action tuple (or None)."""
-        for i in range(len(O.TABS)):
-            if self.tab_rect(i).collidepoint(x, y):
-                return ("tab", i)
-        for i, (_, name) in enumerate(BUTTONS):
-            if self.button_rects(height)[i].collidepoint(x, y):
-                return ("button", name)
-        for i in range(len(O.TABS[tab][1])):
-            if self.row_rect(i).collidepoint(x, y):
-                side = -1 if x < 168 else (1 if x > PANEL_W - 64 else 0)
-                return ("row", i, side)
+    # ---- interaction ---------------------------------------------------------------
+    def action_at(self, pos):
+        for rect, action in reversed(self.widgets):
+            if rect.collidepoint(pos):
+                return action
         return None
 
-    # ---- drawing ----------------------------------------------------------------
-    def render(self, state, tab, row, message, code, height):
-        self.height = height
-        s = pygame.Surface((PANEL_W, height), pygame.SRCALPHA)
-        s.fill(BG + (255,))
-        s.blit(self.title.render("Avatar Creator", True, (240, 240, 245)), (16, 10))
-        for i, (name, _) in enumerate(O.TABS):
-            r = self.tab_rect(i)
-            active = i == tab
-            pygame.draw.rect(s, ACCENT if active else (44, 48, 62), r, border_radius=6)
-            txt = self.tab_font.render(name, True, (255, 255, 255) if active else (160, 166, 184))
-            s.blit(txt, txt.get_rect(center=r.center))
-        keys = O.TABS[tab][1]
-        for i, key in enumerate(keys):
-            r = self.row_rect(i)
-            if i == row:
-                pygame.draw.rect(s, (52, 58, 78), r, border_radius=6)
-            s.blit(self.font.render(O.label(key), True, (170, 176, 192)), (16, r.y + 3))
-            name, val = O.choices(key)[state[key]]
-            x = 150
-            s.blit(self.font.render("‹", True, (120, 128, 150)), (x, r.y + 2))
-            if key in O.COLOR_KEYS:
-                pygame.draw.rect(s, [int(c * 255) for c in val], (x + 16, r.y + 5, 14, 14), border_radius=3)
-                x += 20
-            s.blit(self.font.render(name, True, (235, 236, 242)), (x + 18, r.y + 3))
-            s.blit(self.font.render("›", True, (120, 128, 150)), (PANEL_W - 24, r.y + 2))
-        y = ROW0 + len(keys) * ROW_H + 10
-        s.blit(self.small.render("Share code (C copies, Ctrl+V pastes)", True, (120, 126, 146)), (16, y))
-        s.blit(self.small.render(code, True, (190, 196, 215)), (16, y + 16))
-        for r, (label, _) in zip(self.button_rects(height), BUTTONS):
-            pygame.draw.rect(s, (44, 48, 62), r, border_radius=7)
-            txt = self.tab_font.render(label, True, (225, 228, 238))
-            s.blit(txt, txt.get_rect(center=r.center))
-        y = height - 82
-        for line in ("Tab: switch tab   ↑/↓ select   ←/→ change",
-                     "R random  V view  Space spin  [ ] presets",
-                     "S PNG  G transparent  E GLB  O OBJ  P photo",
-                     "K/L save/load   Drag: orbit   Wheel: zoom"):
-            s.blit(self.small.render(line, True, (118, 124, 144)), (16, y))
-            y += 15
-        if message:
-            s.blit(self.small.render(message[:52], True, (140, 210, 160)), (16, height - 18))
-        glBindTexture(GL_TEXTURE_2D, self.tex)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, PANEL_W, height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                     pygame.image.tostring(s, "RGBA", False))
+    def hover(self, pos):
+        """Track the pointer; returns True if the hovered control changed (needs a redraw)."""
+        self.mouse = pos
+        act = self.action_at(pos)
+        if act != self.hover_action:
+            self.hover_action = act
+            self.dirty = True
+            return True
+        return False
 
+    def hit(self, pos):
+        return self.action_at(pos)
+
+    def over_panel(self, pos):
+        return self.panel_rect.collidepoint(pos)
+
+    def scroll_by(self, notches, pos):
+        """Wheel over the panel scrolls its content; returns True if it was consumed."""
+        if not self.over_panel(pos):
+            return False
+        cur = self.scroll.get(self.tab, 0)
+        self.scroll[self.tab] = max(0, min(self.max_scroll, cur - notches * 44))
+        self.dirty = True
+        return True
+
+    def focus_changed(self):
+        self.focus_key = "pending"
+
+    # ---- layout ---------------------------------------------------------------------
+    @staticmethod
+    def layout(keys, state, width):
+        """Position labels, chips and swatches relative to the content origin."""
+        items, sections, y = [], [], 0
+        for key in keys:
+            top = y
+            items.append(("label", pygame.Rect(0, y, width, 20), key))
+            y += 26
+            opts = O.choices(key)
+            if key in O.COLOR_KEYS:
+                x = 0
+                for j, (name, c) in enumerate(opts):
+                    if x + 30 > width:
+                        x, y = 0, y + 38
+                    items.append(("swatch", pygame.Rect(x, y, 30, 30), (key, j)))
+                    x += 38
+                y += 38
+            else:
+                x = 0
+                for j, (name, _) in enumerate(opts):
+                    w = text_width(name, False, 13) + 26
+                    if x + w > width:
+                        x, y = 0, y + 34
+                    items.append(("chip", pygame.Rect(x, y, w, 28), (key, j)))
+                    x += w + 6
+                y += 34
+            y += 14
+            sections.append((key, top, y - 14))
+        return items, y, sections
+
+    # ---- rendering --------------------------------------------------------------------
+    def render(self, m, size):
+        W, H = size
+        surf = pygame.Surface((W, H), pygame.SRCALPHA)
+        self.widgets = []
+        self.tab = m.tab
+        px, py, pw, ph = W - PANEL_W - MARGIN, MARGIN, PANEL_W, H - 2 * MARGIN
+        self.panel_rect = pygame.Rect(px, py, pw, ph)
+        hov = self.hover_action
+
+        surf.blit(shadow(pw, ph, 18), (px - 26, py - 20))
+        surf.blit(pill(pw, ph, 18, COL["panel"]), (px, py))
+        x0, inner = px + 22, pw - 44
+
+        # header
+        surf.blit(text("Avatar Creator", True, 22, COL["text"]), (x0, py + 16))
+        surf.blit(text("Cel-shaded character studio", False, 12, COL["muted"]), (x0, py + 46))
+
+        # tabs
+        n, gap, tab_h = len(O.TABS), 4, 30
+        tw = (inner - gap * (n - 1)) // n
+        ty = py + 74
+        for i, (name, _) in enumerate(O.TABS):
+            r = pygame.Rect(x0 + i * (tw + gap), ty, tw, tab_h)
+            act = ("tab", i)
+            if i == m.tab:
+                surf.blit(pill(r.w, r.h, 9, COL["accent"]), r)
+            elif hov == act:
+                surf.blit(pill(r.w, r.h, 9, COL["chip"]), r)
+            label = text(name, True, 13, COL["text"] if i == m.tab or hov == act else COL["muted"])
+            surf.blit(label, label.get_rect(center=r.center))
+            self.widgets.append((r, act))
+
+        # scrolling content
+        top = ty + tab_h + 16
+        footer_h = 146
+        clip = pygame.Rect(px + 6, top, pw - 12, py + ph - footer_h - top)
+        keys = O.TABS[m.tab][1]
+        items, total_h, sections = self.layout(keys, m.state, inner - 10)
+        self.max_scroll = max(0, total_h - clip.h)
+        focus_key = keys[min(m.focus, len(keys) - 1)]
+        sc = self.scroll.get(m.tab, 0)
+        if self.focus_key == "pending":               # keep the keyboard focus visible
+            for key, s_top, s_bot in sections:
+                if key == focus_key:
+                    if s_top < sc:
+                        sc = s_top
+                    elif s_bot > sc + clip.h:
+                        sc = s_bot - clip.h
+            self.focus_key = None
+        sc = max(0, min(self.max_scroll, sc))
+        self.scroll[m.tab] = sc
+        ox, oy = x0, clip.y - sc
+
+        surf.set_clip(clip)
+        for key, s_top, s_bot in sections:
+            if key == focus_key:
+                surf.blit(pill(3, s_bot - s_top, 1, COL["accent"]), (px + 10, oy + s_top))
+        for kind, rect, data in items:
+            r = rect.move(ox, oy)
+            if r.bottom < clip.top or r.top > clip.bottom:
+                continue
+            if kind == "label":
+                key = data
+                surf.blit(text(O.label(key).upper(), True, 11, COL["text"] if key == focus_key else COL["muted"]),
+                          (r.x, r.y + 2))
+                val = O.choices(key)[m.state[key]][0]
+                v = text(val, False, 12, COL["faint"])
+                surf.blit(v, (r.right - v.get_width(), r.y + 1))
+                continue
+            key, j = data
+            act = ("choose", key, j)
+            selected = m.state[key] == j
+            hovered = hov == act and clip.collidepoint(self.mouse)
+            if kind == "swatch":
+                color = rgb(O.choices(key)[j][1])
+                ring = COL["accent_hover"] if selected else (COL["text"] if hovered else None)
+                if selected:
+                    surf.blit(disc(30, COL["panel"], COL["accent_hover"], 3), r)
+                    surf.blit(disc(20, color), (r.x + 5, r.y + 5))
+                else:
+                    surf.blit(disc(26 if not hovered else 28, color), (r.x + (2 if not hovered else 1),
+                                                                        r.y + (2 if not hovered else 1)))
+                    if hovered:
+                        surf.blit(disc(30, (0, 0, 0, 0), COL["muted"], 2), r)
+            else:
+                name = O.choices(key)[j][0]
+                bg = COL["accent"] if selected else (COL["chip_hover"] if hovered else COL["chip"])
+                surf.blit(pill(r.w, r.h, 10, bg), r)
+                label = text(name, False, 13, COL["text"] if selected or hovered else (200, 204, 220))
+                surf.blit(label, label.get_rect(center=r.center))
+            vis = r.clip(clip)
+            if vis.w > 0 and vis.h > 0:
+                self.widgets.append((vis, act))
+        surf.set_clip(None)
+        if self.max_scroll:
+            surf.blit(fade(clip.w, 18, COL["panel"], True), (clip.x, clip.y))
+            surf.blit(fade(clip.w, 22, COL["panel"], False), (clip.x, clip.bottom - 22))
+            track_h = clip.h - 8
+            thumb_h = max(30, int(track_h * clip.h / total_h))
+            thumb_y = clip.y + 4 + int((track_h - thumb_h) * sc / self.max_scroll)
+            surf.blit(pill(4, thumb_h, 2, COL["line"]), (px + pw - 12, thumb_y))
+
+        # footer: share code, action buttons, hint
+        fy = py + ph - footer_h
+        pygame.draw.line(surf, COL["line"], (x0, fy + 6), (x0 + inner, fy + 6))
+        copy_r = pygame.Rect(x0 + inner - 58, fy + 20, 58, 30)
+        box = pygame.Rect(x0, fy + 20, inner - 66, 30)
+        surf.blit(pill(box.w, box.h, 9, COL["panel2"]), box)
+        surf.blit(text(m.code, False, 11, COL["muted"]), (box.x + 10, box.y + 8))
+        hc = hov == ("copy",)
+        surf.blit(pill(copy_r.w, copy_r.h, 9, COL["chip_hover"] if hc else COL["chip"]), copy_r)
+        cl = text("Copy", True, 12, COL["text"])
+        surf.blit(cl, cl.get_rect(center=copy_r.center))
+        self.widgets.append((copy_r, ("copy",)))
+
+        buttons = [("Random", "random", True), ("Photo", "photo", False),
+                   ("PNG", "png", False), ("GLB", "glb", False)]
+        bw = (inner - 3 * 8) // 4
+        for i, (label, name, primary) in enumerate(buttons):
+            r = pygame.Rect(x0 + i * (bw + 8), fy + 64, bw, 40)
+            act = ("button", name)
+            hv = hov == act
+            color = (COL["accent_hover"] if hv else COL["accent"]) if primary else (
+                COL["chip_hover"] if hv else COL["chip"])
+            surf.blit(pill(r.w, r.h, 12, color), r)
+            t = text(label, True, 13, COL["text"])
+            surf.blit(t, t.get_rect(center=r.center))
+            self.widgets.append((r, act))
+        hint = text("Press H for keyboard shortcuts", False, 11, COL["faint"])
+        surf.blit(hint, hint.get_rect(midtop=(px + pw // 2, fy + 114)))
+
+        # view switcher floating over the scene
+        vcx = (W - RESERVED) // 2
+        seg_w, bar_h = 64, 40
+        labels = [(name, key) for key, name in VIEWS]
+        bar_w = seg_w * len(labels) + 86 + 12
+        bar = pygame.Rect(vcx - bar_w // 2, H - 66, bar_w, bar_h)
+        surf.blit(shadow(bar.w, bar.h, 20, 14), (bar.x - 14, bar.y - 8))
+        surf.blit(pill(bar.w, bar.h, 20, COL["panel"] + (235,)), bar)
+        for i, (name, key) in enumerate(labels):
+            r = pygame.Rect(bar.x + 6 + i * seg_w, bar.y + 5, seg_w, bar_h - 10)
+            act = ("view", key)
+            if m.view == key:
+                surf.blit(pill(r.w, r.h, 15, COL["accent"]), r)
+            elif hov == act:
+                surf.blit(pill(r.w, r.h, 15, COL["chip"]), r)
+            t = text(name, True, 13, COL["text"] if m.view == key or hov == act else COL["muted"])
+            surf.blit(t, t.get_rect(center=r.center))
+            self.widgets.append((r, act))
+        r = pygame.Rect(bar.x + 6 + len(labels) * seg_w + 8, bar.y + 5, 74, bar_h - 10)
+        act = ("toggle", "spin")
+        if hov == act:
+            surf.blit(pill(r.w, r.h, 15, COL["chip"]), r)
+        surf.blit(disc(9, COL["ok"] if m.spin else COL["faint"]), (r.x + 10, r.centery - 4))
+        t = text("Spin", True, 13, COL["text"] if m.spin or hov == act else COL["muted"])
+        surf.blit(t, (r.x + 26, r.centery - t.get_height() // 2))
+        self.widgets.append((r, act))
+
+        # toast
+        if m.toast and m.toast_alpha > 0:
+            label = m.toast if len(m.toast) < 70 else m.toast[:67] + "..."
+            t = text(label, False, 13, COL["text"])
+            tw_, th_ = t.get_width() + 44, 38
+            r = pygame.Rect(vcx - tw_ // 2, H - 118, tw_, th_)
+            a = int(255 * min(1.0, m.toast_alpha))
+            toast = pygame.Surface((r.w, r.h), pygame.SRCALPHA)
+            toast.blit(pill(r.w, r.h, 19, COL["panel2"] + (240,)), (0, 0))
+            toast.blit(disc(8, COL["ok"]), (14, r.h // 2 - 4))
+            toast.blit(t, (30, r.h // 2 - t.get_height() // 2))
+            toast.set_alpha(a)
+            surf.blit(toast, r)
+
+        # shortcut sheet
+        if m.help:
+            veil = pygame.Surface((W - RESERVED, H), pygame.SRCALPHA)
+            veil.fill((10, 11, 16, 150))
+            surf.blit(veil, (0, 0))
+            cw, chh = 420, 60 + len(SHORTCUTS) * 27
+            card = pygame.Rect(vcx - cw // 2, max(20, (H - chh) // 2), cw, chh)
+            surf.blit(shadow(cw, chh, 18), (card.x - 26, card.y - 20))
+            surf.blit(pill(cw, chh, 18, COL["panel"]), card)
+            surf.blit(text("Keyboard shortcuts", True, 18, COL["text"]), (card.x + 24, card.y + 18))
+            for i, (k, desc) in enumerate(SHORTCUTS):
+                y = card.y + 56 + i * 27
+                surf.blit(pill(text_width(k, True, 12) + 16, 22, 7, COL["chip"]), (card.x + 24, y))
+                surf.blit(text(k, True, 12, COL["text"]), (card.x + 32, y + 3))
+                surf.blit(text(desc, False, 13, COL["muted"]), (card.x + 190, y + 2))
+
+        self.surface = surf
+        self.dirty = False
+        self.uploaded = False
+
+    # ---- OpenGL ---------------------------------------------------------------------------
     def draw(self, size):
+        from OpenGL.GL import (GL_LINEAR, GL_QUADS, GL_RGBA, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
+                               GL_TEXTURE_MIN_FILTER, GL_UNSIGNED_BYTE, GL_DEPTH_TEST, glBegin,
+                               glBindTexture, glColor4f, glDisable, glEnable, glEnd, glGenTextures,
+                               glLoadIdentity, glMatrixMode, glOrtho, glTexCoord2f, glTexImage2D,
+                               glTexParameteri, glTexSubImage2D, glUseProgram, glVertex2f,
+                               glViewport, GL_MODELVIEW, GL_PROJECTION)
         w, h = size
+        if self.tex is None:
+            self.tex = glGenTextures(1)
+            glBindTexture(GL_TEXTURE_2D, self.tex)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glBindTexture(GL_TEXTURE_2D, self.tex)
+        if not self.uploaded:
+            data = pygame.image.tostring(self.surface, "RGBA", False)
+            if self.tex_size != (w, h):
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data)
+                self.tex_size = (w, h)
+            else:
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data)
+            self.uploaded = True
         glUseProgram(0)
         glViewport(0, 0, w, h)
         glMatrixMode(GL_PROJECTION)
@@ -114,11 +428,9 @@ class Panel:
         glLoadIdentity()
         glDisable(GL_DEPTH_TEST)
         glEnable(GL_TEXTURE_2D)
-        glBindTexture(GL_TEXTURE_2D, self.tex)
         glColor4f(1, 1, 1, 1)
-        x0 = w - PANEL_W
         glBegin(GL_QUADS)
-        for u, v, x, y in ((0, 0, x0, 0), (1, 0, w, 0), (1, 1, w, h), (0, 1, x0, h)):
+        for u, v, x, y in ((0, 0, 0, 0), (1, 0, w, 0), (1, 1, w, h), (0, 1, 0, h)):
             glTexCoord2f(u, v)
             glVertex2f(x, y)
         glEnd()

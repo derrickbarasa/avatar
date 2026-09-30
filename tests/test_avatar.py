@@ -116,7 +116,7 @@ class StrandTests(unittest.TestCase):
 
     def strand_meshes(self, hair):
         rig = default_rig(hair=hair)
-        return [m for m in rig["head"].meshes if m.strand]
+        return [m for m in rig["head"].meshes if m.strand and m.part == "hair"]
 
     def test_every_style_grows_real_strands(self):
         for hair in self.STYLES:
@@ -156,6 +156,139 @@ class StrandTests(unittest.TestCase):
     def test_strands_have_no_outline_pass(self):
         for m in self.strand_meshes("Long"):
             self.assertFalse(m.outline)
+
+
+class FacialStrandTests(unittest.TestCase):
+    def head_strands(self, **changes):
+        rig = default_rig(**changes)
+        return [m for m in rig["head"].meshes if m.strand]
+
+    def test_beard_mustache_and_brows_are_strands(self):
+        none = self.head_strands(hair="Bald")                       # brows only
+        stache = self.head_strands(hair="Bald", facial="Mustache")
+        beard = self.head_strands(hair="Bald", facial="Beard")
+        self.assertEqual(len(none), 1)
+        self.assertEqual(len(stache), 2)
+        self.assertEqual(len(beard), 2)
+        vertex_count = lambda ms: sum(len(m.v) for m in ms)
+        self.assertGreater(vertex_count(beard), vertex_count(stache) * 3)
+
+    def test_brow_thickness_changes_hair_count(self):
+        thin = self.head_strands(hair="Bald", brows="Thin")[0]
+        thick = self.head_strands(hair="Bald", brows="Thick")[0]
+        self.assertGreater(len(thick.v), len(thin.v) * 1.5)
+
+    def test_facial_strands_stay_outside_the_skin(self):
+        from avatarkit.head import cached_head
+        from avatarkit.strands import Skin
+        rig = default_rig(hair="Bald", facial="Beard")
+        head = cached_head(tuple(O.resolve(dict(O.DEFAULT_STATE))["skin"]), 0.28, 1.0)
+        skin = Skin(head, np.ones(len(head.P), bool))
+        beard = [m for m in rig["head"].meshes if m.strand][-1]
+        v = beard.v.astype(float)[::7]
+        j = skin.nearest(v)
+        depth = ((v - skin.v[j]) * skin.n[j]).sum(1)
+        self.assertGreater(np.percentile(depth, 2), -0.01)   # (almost) nothing dips into the face
+
+    def test_beard_hangs_below_the_chin(self):
+        beard = self.head_strands(hair="Bald", facial="Beard")[-1]
+        self.assertLess(beard.v[:, 1].min(), -0.62)
+
+
+class UITests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+        import pygame
+        pygame.font.init()
+
+    def model(self, tab=0, **kw):
+        from avatarkit.ui import UIModel
+        return UIModel(dict(O.DEFAULT_STATE), tab=tab, code=O.encode_state(O.DEFAULT_STATE), **kw)
+
+    def collect(self, ui, tab, size=(1000, 720)):
+        """Every choose-action reachable in a tab by scrolling from top to bottom."""
+        seen = set()
+        ui.render(self.model(tab), size)
+        for offset in range(0, ui.max_scroll + 80, 60):
+            ui.scroll[tab] = offset
+            ui.render(self.model(tab), size)
+            seen |= {a for _, a in ui.widgets if a[0] == "choose"}
+        return seen
+
+    def test_every_option_value_is_reachable_by_scrolling(self):
+        from avatarkit.ui import UI
+        ui = UI()
+        for tab, (_, keys) in enumerate(O.TABS):
+            seen = self.collect(ui, tab)
+            wanted = {("choose", k, j) for k in keys for j in range(len(O.choices(k)))}
+            self.assertEqual(seen, wanted, O.TABS[tab][0])
+
+    def test_controls_stay_inside_the_card(self):
+        from avatarkit.ui import UI
+        ui = UI()
+        for tab in range(len(O.TABS)):
+            ui.render(self.model(tab), (1000, 720))
+            for rect, action in ui.widgets:
+                if action[0] in ("choose", "tab", "button", "copy"):
+                    self.assertTrue(ui.panel_rect.contains(rect), (tab, action, rect))
+
+    def test_clicks_map_to_actions(self):
+        from avatarkit.ui import UI
+        ui = UI()
+        ui.render(self.model(0), (1000, 720))
+        tabs = {a: r for r, a in ui.widgets if a[0] == "tab"}
+        self.assertEqual(ui.hit(tabs[("tab", 3)].center), ("tab", 3))
+        self.assertIsNone(ui.hit((20, 20)))                       # empty scene area
+        names = {a[1] for _, a in ui.widgets if a[0] == "button"}
+        self.assertEqual(names, {"random", "photo", "png", "glb"})
+        views = {a[1] for _, a in ui.widgets if a[0] == "view"}
+        self.assertEqual(views, {"bust", "face", "full"})
+
+    def test_hover_only_asks_for_a_redraw_when_the_target_changes(self):
+        from avatarkit.ui import UI
+        ui = UI()
+        ui.render(self.model(0), (1000, 720))
+        tab = next(r for r, a in ui.widgets if a == ("tab", 2))
+        self.assertTrue(ui.hover(tab.center))
+        self.assertFalse(ui.hover((tab.centerx + 1, tab.centery)))   # same control
+        self.assertTrue(ui.hover((5, 5)))                           # left it
+
+    def test_scrolling_is_clamped_and_wheel_ignored_off_panel(self):
+        from avatarkit.ui import UI
+        ui = UI()
+        ui.render(self.model(0), (1000, 500))
+        self.assertGreater(ui.max_scroll, 0)
+        self.assertFalse(ui.scroll_by(3, (10, 10)))
+        for _ in range(60):
+            ui.scroll_by(-3, ui.panel_rect.center)
+        ui.render(self.model(0), (1000, 500))
+        self.assertEqual(ui.scroll[0], ui.max_scroll)
+        for _ in range(80):
+            ui.scroll_by(3, ui.panel_rect.center)
+        ui.render(self.model(0), (1000, 500))
+        self.assertEqual(ui.scroll[0], 0)
+
+    def test_keyboard_focus_scrolls_into_view(self):
+        from avatarkit.ui import UI
+        ui = UI()
+        last = len(O.TABS[0][1]) - 1
+        ui.render(self.model(0, focus=0), (1000, 500))
+        ui.focus_changed()
+        ui.render(self.model(0, focus=last), (1000, 500))
+        self.assertGreater(ui.scroll[0], 0)
+
+    def test_toast_and_shortcut_sheet_render(self):
+        from avatarkit.ui import UI
+        ui = UI()
+        ui.render(self.model(0), (1000, 720))
+        base = bytes(ui.surface.get_view("0"))
+        ui.render(self.model(0, toast="Saved a.png", toast_alpha=1.0), (1000, 720))
+        with_toast = bytes(ui.surface.get_view("0"))
+        ui.render(self.model(0, help=True), (1000, 720))
+        with_help = bytes(ui.surface.get_view("0"))
+        self.assertNotEqual(base, with_toast)
+        self.assertNotEqual(base, with_help)
 
 
 class PoseTests(unittest.TestCase):

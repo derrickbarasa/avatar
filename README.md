@@ -4,12 +4,13 @@ A stylised 3D avatar creator. The character is generated in code from smooth
 meshes and drawn with a cel-shading shader and inked outlines. Pick every
 feature from a tabbed side panel, strike a pose, and export the result.
 
-- **Face:** sculpted head (nose, brows, cheekbones, jaw), eyes with a procedural
-  iris, eyelids that blink, lips, six expressions, freckles, glasses, earrings.
+- **Face:** sculpted head (nose, cheekbones, jaw), eyes with a procedural iris,
+  eyelids that blink, lips, six expressions, freckles, glasses, earrings.
 - **Hair:** twelve styles built from thousands of real strands (grown from the
   scalp, clumped into locks, pushed out of the head and shoulders, with
   anisotropic highlights): short, curly, long, bob, bangs, bun, ponytail, quiff,
-  mohawk, afro. Plus hats and facial hair.
+  mohawk, afro. Beards, moustaches and eyebrows are strands too, hugging the
+  skin. Plus hats.
 - **Body:** three body types, build and height, hands with fingers.
 - **Outfit:** tee, long sleeve, tank, hoodie, jacket; jeans, shorts, skirt;
   sneakers, boots or barefoot; stripes, dots, plaid or a chest emblem.
@@ -34,8 +35,11 @@ extra tests.
 
 | Input | Action |
 | --- | --- |
+| Click | pick a swatch or chip; click a tab; drag the scene to orbit |
 | Tab / Shift+Tab | switch panel tab |
-| ↑ / ↓ , ← / → | select option / change it (or click a row; left and right of the value) |
+| ↑ / ↓ , ← / → | move the focus between options / change the focused option |
+| Wheel | scroll the panel, or zoom when over the scene |
+| H | show or hide the shortcut sheet |
 | R | randomize everything |
 | [ / ] | previous / next outfit preset |
 | V | cycle camera: bust / face / full body |
@@ -47,7 +51,15 @@ extra tests.
 | P | pick a photo and set skin tone, hair colour and length, facial hair |
 | K / L | save / load `avatar.json` |
 
-The window can be resized; the side panel stays on the right.
+## Interface
+
+A floating card holds six tabs (Face, Hair, Body, Outfit, Extras, Scene). Colour
+options are swatches, everything else is a row of chips; long tabs scroll. The
+share code and the Random / Photo / PNG / GLB buttons sit at the bottom of the
+card. A pill over the scene switches between bust, face and full-body views and
+toggles the turntable, and short toasts confirm saves and exports. The window
+can be resized; the 3D scene fills it and the avatar stays centred in the space
+left of the card.
 
 ## Command line
 
@@ -94,7 +106,7 @@ avatarkit/
   rig.py poses.py    skeleton and pose / animation functions
   builder.py         assembles an avatar from options
   render.py          GLSL cel shader, outline pass, camera, capture
-  ui.py app.py       side panel, input handling, command line
+  ui.py app.py       interface overlay (card, chips, toasts), input, command line
   exporters.py       OBJ and GLB writers
   photo.py           photo -> option suggestions
 tests/               python -m unittest discover -s tests

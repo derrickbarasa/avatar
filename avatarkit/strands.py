@@ -13,6 +13,7 @@ import zlib
 
 import numpy as np
 
+from .head import EYE_X, EYE_Y, MOUTH_Y
 from .mathutil import catmull, smoothstep, unit
 from .mesh import Mesh, grid_faces
 
@@ -82,7 +83,7 @@ def collide(p):
 
 
 def grow(root, nrm, d0, length, steps, rng, locks, gravity=0.3, wave=0.0, waves=2.0,
-         tuck=0.0, jitter=0.15, floor=0.09, lift=None):
+         tuck=0.0, jitter=0.15, floor=0.09, lift=None, collider=None):
     """Integrate strands. Returns paths (N, steps + 1, 3)."""
     n = len(root)
     uniq, inv = locks
@@ -107,7 +108,7 @@ def grow(root, nrm, d0, length, steps, rng, locks, gravity=0.3, wave=0.0, waves=
             ns = np.linalg.norm(side, axis=1, keepdims=True)
             side = np.where(ns > 1e-4, side / np.maximum(ns, 1e-9), np.array([1.0, 0.0, 0.0]))
             d = unit(d + wave * np.cos(2 * math.pi * waves * t + phase)[:, None] * side)
-        p = collide(p + d * step)
+        p = (collider or collide)(p + d * step)
         pts[i] = p
     return pts.transpose(1, 0, 2)
 
@@ -144,7 +145,7 @@ def curl(pts, radius, turns, rng, locks):
 # ---------------------------------------------------------------------------
 # Mesh from paths
 # ---------------------------------------------------------------------------
-def strand_mesh(paths, base_color, radius, rng, locks, flyaway=0.02):
+def strand_mesh(paths, base_color, radius, rng, locks, flyaway=0.02, part="hair"):
     """Merge strand paths (N, S1, 3) into a single tube mesh."""
     n, s1, _ = paths.shape
     t = np.linspace(0, 1, s1)
@@ -182,6 +183,7 @@ def strand_mesh(paths, base_color, radius, rng, locks, flyaway=0.02):
                 kind="hair")
     mesh.tangents = np.ascontiguousarray(tangents, np.float32)
     mesh.strand = True
+    mesh.part = part          # "hair", "facial" or "brows"
     return mesh
 
 
@@ -380,3 +382,123 @@ def strand_meshes(head, style, color, margin):
     inv = np.concatenate([g[1][1] + o for g, o in zip(groups, offsets)])
     radius = float(np.mean([g[2] for g in groups]))
     return [strand_mesh(paths, color, radius, rng, (np.arange(inv.max() + 1), inv))]
+
+
+# ---------------------------------------------------------------------------
+# Facial hair and eyebrows: strands that hug the skin
+# ---------------------------------------------------------------------------
+class Skin:
+    """Keeps points outside the head mesh by pushing them along the nearest vertex normal."""
+
+    def __init__(self, head, region):
+        idx = np.flatnonzero(region)
+        self.v = head.P[idx].astype(np.float32)
+        self.n = head.mesh.n[idx].astype(np.float32)
+        self.v2 = (self.v ** 2).sum(1)
+        self.vt = np.ascontiguousarray(-2 * self.v.T)   # so |p - v|^2 needs one small matmul
+
+    def nearest(self, p):
+        p = np.asarray(p, np.float32)
+        out = np.empty(len(p), np.int64)
+        for a in range(0, len(p), 1500):           # chunked so the distance matrix stays small
+            d = p[a:a + 1500] @ self.vt + self.v2[None, :]
+            out[a:a + 1500] = d.argmin(1)
+        return out
+
+    def normals(self, p):
+        return self.n[self.nearest(p)].astype(float)
+
+    def push(self, p, offset):
+        j = self.nearest(p)
+        rel = p - self.v[j]
+        h = (rel * self.n[j]).sum(1)
+        low = h < offset
+        p[low] += self.n[j][low] * (offset - h[low])[:, None]
+        return p
+
+
+def _face_region(head):
+    return (head.Z > -0.15) & (head.Y < 0.02) & (head.Y > -0.7)
+
+
+def _tangent(vec, nrm):
+    return unit(vec - nrm * (vec * nrm).sum(1, keepdims=True) + 1e-9)
+
+
+def mustache_margin(head):
+    """> 0 inside the moustache area above the upper lip (shape of head.Y)."""
+    m = 1 - np.sqrt((head.X / 0.20) ** 2 + ((head.Y + 0.305) / 0.04) ** 2)
+    return np.where(head.Z > 0.25, m, -1.0)
+
+
+def facial_strand_meshes(head, beard_margin, color, with_beard):
+    """Beard (optional) and mustache strands. `beard_margin` > 0 marks the beard area."""
+    rng = np.random.default_rng(zlib.crc32(b"facial"))
+    skin = Skin(head, _face_region(head))
+    groups = []
+    steps = 6
+
+    if with_beard:
+        fade = lambda p: rng.random(len(p)) < smoothstep(-0.215, -0.34, p[:, 1]) ** 0.7   # thin out up the cheeks
+        root, nrm = sample_roots(head, beard_margin, 2800, rng, keep=fade, min_margin=0.02)
+        towards_chin = np.stack([-np.sign(root[:, 0]) * 0.35, np.full(len(root), 0.0),
+                                 np.full(len(root), 0.12)], 1)
+        d0 = _tangent(DOWN + towards_chin, nrm)
+        longer = smoothstep(-0.35, -0.62, root[:, 1])
+        length = (0.09 + 0.10 * longer) * (0.85 + 0.3 * rng.random(len(root)))
+        locks = make_locks(root, 16)
+        paths = grow(root, nrm, d0, length, steps, rng, locks, gravity=0.5, wave=0.05, jitter=0.22,
+                     floor=0.25, collider=lambda p: skin.push(p, 0.007))
+        groups.append((paths, locks, 0.0055))
+
+    root, nrm = sample_roots(head, mustache_margin(head), 800, rng, min_margin=0.0)
+    sgn = np.where(root[:, 0] >= 0, 1.0, -1.0)
+    d0 = _tangent(np.stack([sgn * 0.9, np.full(len(root), -0.45), np.full(len(root), 0.15)], 1), nrm)
+    length = 0.10 * (0.8 + 0.4 * rng.random(len(root)))
+    locks = make_locks(root, 24)
+    paths = grow(root, nrm, d0, length, steps, rng, locks, gravity=0.45, wave=0.04, jitter=0.15,
+                 floor=0.2, collider=lambda p: skin.push(p, 0.008))
+    groups.append((paths, locks, 0.0062))
+
+    paths = np.concatenate([g[0] for g in groups])
+    offsets = np.cumsum([0] + [len(g[1][0]) for g in groups[:-1]])
+    inv = np.concatenate([g[1][1] + o for g, o in zip(groups, offsets)])
+    radius = float(np.mean([g[2] for g in groups]))
+    return [strand_mesh(paths, color, radius, rng, (np.arange(inv.max() + 1), inv), flyaway=0.01,
+                        part="facial")]
+
+
+def brow_curve(t, side, dy, tilt):
+    """Brow centre line and its direction (inner end t=0 to outer end t=1)."""
+    x = side * (0.075 + 0.20 * t)
+    y = 0.185 + 0.045 * np.sin(t * math.pi * 0.85) - 0.02 * t + dy - tilt * 0.05 * (1 - t) + tilt * 0.02 * t
+    dx = side * 0.20 * np.ones_like(t)
+    dyd = 0.045 * math.pi * 0.85 * np.cos(t * math.pi * 0.85) - 0.02 + tilt * 0.05 + tilt * 0.02
+    return x, y, dx, dyd
+
+
+def brow_strand_meshes(head, thickness, color, dy=0.0, tilt=0.0):
+    """Both eyebrows as short hairs lying along the brow, thicker at the inner end."""
+    rng = np.random.default_rng(zlib.crc32(b"brows"))
+    skin = Skin(head, (head.Z > 0.0) & (np.abs(head.Y - 0.18) < 0.3))
+    roots, dirs, sides = [], [], []
+    per = int(240 * thickness)
+    for side in (-1, 1):
+        t = rng.random(per)
+        x, y, dx, dyd = brow_curve(t, side, dy, tilt)
+        width = 0.016 * thickness * (1.1 - 0.65 * t)
+        y = y + rng.uniform(-1, 1, per) * width * 0.9
+        z = np.array([head.z_at(a, b) for a, b in zip(x, y)])
+        roots.append(np.stack([x, y, z], 1))
+        # hairs lean outward and, near the inner end, upward
+        d = np.stack([dx, dyd + 0.15 * (1 - t) * 0.2, np.zeros(per)], 1)
+        dirs.append(unit(d + 1e-9))
+    root, d0 = np.concatenate(roots), np.concatenate(dirs)
+    nrm = skin.normals(root)
+    d0 = _tangent(d0 + rng.normal(size=d0.shape) * 0.12, nrm)
+    locks = make_locks(root, 40)
+    length = 0.045 * (0.75 + 0.5 * rng.random(len(root)))
+    paths = grow(root, nrm, d0, length, 4, rng, locks, gravity=0.05, jitter=0.1, floor=0.0,
+                 collider=lambda p: skin.push(p, 0.004))
+    return [strand_mesh(paths, color, 0.0034, rng, (np.arange(len(root)), np.arange(len(root))),
+                        flyaway=0.0, part="brows")]
