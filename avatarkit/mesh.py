@@ -46,9 +46,10 @@ class Mesh:
         self.pattern, self.color2, self.freckle = 0, (1.0, 1.0, 1.0), 0.0
         self.center = (0.0, 0.0, 0.0)
         self.anim = None
+        self.tangents, self.strand = None, False   # hair strands: per-vertex direction
 
     def outlined(self):
-        self.outline = not self.joint
+        self.outline = not (self.joint or self.strand)
         return self
 
     def set(self, **attrs):

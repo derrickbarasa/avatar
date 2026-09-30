@@ -6,6 +6,7 @@ import numpy as np
 from .head import MOUTH_Y
 from .mathutil import catmull, mix, rot_x, smoothstep
 from .mesh import Mesh, ellipsoid, grid_faces, tube, unit_sphere_z
+from .strands import strand_meshes
 
 HAIR = dict(shine=40, spec=0.25, kind="hair")
 
@@ -22,12 +23,19 @@ AZIMUTHS = np.radians([0, 40, 80, 110, 150, 180])
 
 
 def hair_meshes(head, style, color):
+    """Strands grown over a darker under-layer (scalp, hair mass) that hides any gaps."""
     if style == "bald":
         return []
-    if style == "afro":
-        return [afro_mesh(color)]
     theta = np.abs(np.arctan2(head.X, head.Z))
     margin = head.Y - np.interp(theta, AZIMUTHS, HAIRLINES[style])
+    strands = strand_meshes(head, style, color, margin)
+    under = mix(color, (0, 0, 0), 0.38) if strands else color
+    return _under_layer(head, style, under, margin) + strands
+
+
+def _under_layer(head, style, color, margin):
+    if style == "afro":
+        return [afro_mesh(color)]
     top = np.clip(head.Y, 0, 1)
     if style in ("buzz", "mohawk"):
         thick = 0.014
@@ -39,7 +47,7 @@ def hair_meshes(head, style, color):
         thick = 0.05 + 0.03 * top ** 2
     out = [head.shell(margin, thick, color, 0.05, **HAIR)]
     if style == "bun":
-        out.append(ellipsoid((0, 0.66, -0.22), (0.2, 0.2, 0.2), color, **HAIR))
+        out.append(ellipsoid((0, 0.70, -0.22), (0.21, 0.21, 0.21), color, **HAIR))
     elif style == "long":
         out.append(hair_curtain(color, 1.35))
     elif style in ("bob", "bangs"):
@@ -49,9 +57,6 @@ def hair_meshes(head, style, color):
         radii = catmull([(0.07,), (0.11,), (0.09,), (0.025,)], 20)[:, 0]
         out.append(tube(path, radii, color, **HAIR))
         out.append(ellipsoid((0, 0.30, -0.52), (0.09, 0.09, 0.06), (0.85, 0.25, 0.35), thin=True))
-    elif style == "quiff":
-        out.append(ellipsoid((0, 0.68, 0.28), (0.30, 0.17, 0.32), color,
-                             rot=rot_x(math.radians(-15)), detail=28, **HAIR))
     elif style == "mohawk":
         ridge = catmull([(0, 0.50, 0.38), (0, 0.72, 0.12), (0, 0.70, -0.25), (0, 0.40, -0.55)], 24)
         radii = catmull([(0.05,), (0.10,), (0.10,), (0.05,)], 24)[:, 0]

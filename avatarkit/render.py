@@ -23,7 +23,7 @@ void main() {
     vec4 ep = gl_ModelViewMatrix * gl_Vertex;
     vP = ep.xyz;
     vN = gl_NormalMatrix * gl_Normal;
-    vT = gl_NormalMatrix * vec3(0.0, 1.0, 0.0);
+    vT = gl_NormalMatrix * gl_MultiTexCoord0.xyz;   // strand direction (0,1,0 for other meshes)
     vObj = gl_Vertex.xyz;
     vColor = gl_Color;
     gl_Position = gl_ProjectionMatrix * ep;
@@ -44,6 +44,7 @@ uniform vec3 uColor2;
 uniform float uPattern;
 uniform float uFreckle;
 uniform vec3 uCenter;
+uniform float uStrand;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
@@ -120,7 +121,7 @@ void main() {
             base = mix(base, uColor2, pat);
         }
     }
-    if (isHair) {
+    if (isHair && uStrand < 0.5) {
         float th = atan(vObj.x, vObj.z);
         float strand = hash(vec2(floor(th * 64.0), 3.0));
         base *= 0.80 + 0.30 * strand * 0.6 + 0.35 * vnoise(vec2(th * 30.0, vObj.y * 4.0)) * 0.6;
@@ -220,7 +221,7 @@ class Renderer:
             shaders.compileShader(OUTLINE_VERTEX, GL_VERTEX_SHADER),
             shaders.compileShader(OUTLINE_FRAGMENT, GL_FRAGMENT_SHADER), validate=False)
         self.u = {n: glGetUniformLocation(self.prog, n) for n in
-                  ("uKind", "uSpec", "uShine", "uColor2", "uPattern", "uFreckle", "uCenter")}
+                  ("uKind", "uSpec", "uShine", "uColor2", "uPattern", "uFreckle", "uCenter", "uStrand")}
         self.ou = {n: glGetUniformLocation(self.oprog, n) for n in ("uPx", "uViewH", "uOutline")}
         self.blink = 0.0
         self.view_h = 720.0
@@ -362,7 +363,13 @@ class Renderer:
         glUniform1f(u["uPattern"], float(m.pattern))
         glUniform1f(u["uFreckle"], m.freckle)
         glUniform3f(u["uCenter"], *m.center)
+        glUniform1f(u["uStrand"], 1.0 if m.strand else 0.0)
         self._arrays(m)
+        if m.tangents is not None:
+            glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+            glTexCoordPointer(3, GL_FLOAT, 0, m.tangents)
+        else:
+            glMultiTexCoord3f(GL_TEXTURE0, 0.0, 1.0, 0.0)
         if m.colors is not None:
             glEnableClientState(GL_COLOR_ARRAY)
             glColorPointer(m.colors.shape[1], GL_FLOAT, 0, m.colors)
@@ -371,6 +378,8 @@ class Renderer:
         glDrawElements(GL_TRIANGLES, len(m.f), GL_UNSIGNED_INT, m.f)
         if m.colors is not None:
             glDisableClientState(GL_COLOR_ARRAY)
+        if m.tangents is not None:
+            glDisableClientState(GL_TEXTURE_COORD_ARRAY)
 
     # ---- capture ---------------------------------------------------------------------
     @staticmethod

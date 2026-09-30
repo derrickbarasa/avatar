@@ -111,6 +111,53 @@ class BuildTests(unittest.TestCase):
             default_rig(hair=hair, hat="Cap")
 
 
+class StrandTests(unittest.TestCase):
+    STYLES = ["Short", "Curly", "Long", "Bob", "Bangs", "Bun", "Ponytail", "Quiff", "Mohawk", "Afro"]
+
+    def strand_meshes(self, hair):
+        rig = default_rig(hair=hair)
+        return [m for m in rig["head"].meshes if m.strand]
+
+    def test_every_style_grows_real_strands(self):
+        for hair in self.STYLES:
+            meshes = self.strand_meshes(hair)
+            self.assertEqual(len(meshes), 1, hair)
+            m = meshes[0]
+            self.assertGreater(len(m.v), 10000, hair)          # thousands of strands
+            self.assertTrue(np.isfinite(m.v).all(), hair)
+            self.assertIsNotNone(m.tangents)
+            self.assertEqual(len(m.tangents), len(m.v))
+            np.testing.assert_allclose(np.linalg.norm(m.tangents, axis=1), 1.0, atol=1e-3)
+            self.assertEqual(m.colors.shape, (len(m.v), 3))
+
+    def test_bald_and_buzz_have_no_strands(self):
+        for hair in ("Bald", "Buzz"):
+            self.assertEqual(self.strand_meshes(hair), [])
+
+    def test_strands_stay_out_of_the_head(self):
+        from avatarkit.strands import HEAD_C, HEAD_R
+        for hair in ("Long", "Bob", "Short", "Ponytail"):
+            v = self.strand_meshes(hair)[0].v.astype(float)
+            e = (((v - HEAD_C) / (HEAD_R * 0.92)) ** 2).sum(1)
+            self.assertLess((e < 1.0).mean(), 0.02, hair)     # <2% of vertices dip inside
+
+    def test_long_hair_reaches_the_shoulders_and_bob_stops_higher(self):
+        low = lambda hair: self.strand_meshes(hair)[0].v[:, 1].min()
+        self.assertLess(low("Long"), -1.0)
+        self.assertGreater(low("Bob"), low("Long") + 0.3)
+
+    def test_strand_hair_is_deterministic(self):
+        a = self.strand_meshes("Curly")[0].v
+        from avatarkit import builder
+        builder._hair.cache_clear()
+        b = self.strand_meshes("Curly")[0].v
+        np.testing.assert_array_equal(a, b)
+
+    def test_strands_have_no_outline_pass(self):
+        for m in self.strand_meshes("Long"):
+            self.assertFalse(m.outline)
+
+
 class PoseTests(unittest.TestCase):
     def test_all_poses_produce_finite_angles(self):
         for name in POSE_FUNCS:

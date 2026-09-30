@@ -6,8 +6,10 @@ feature from a tabbed side panel, strike a pose, and export the result.
 
 - **Face:** sculpted head (nose, brows, cheekbones, jaw), eyes with a procedural
   iris, eyelids that blink, lips, six expressions, freckles, glasses, earrings.
-- **Hair:** twelve styles (buzz, curly, long, bob, bangs, bun, ponytail, quiff,
-  mohawk, afro...) with strand shading, hats, facial hair.
+- **Hair:** twelve styles built from thousands of real strands (grown from the
+  scalp, clumped into locks, pushed out of the head and shoulders, with
+  anisotropic highlights): short, curly, long, bob, bangs, bun, ponytail, quiff,
+  mohawk, afro. Plus hats and facial hair.
 - **Body:** three body types, build and height, hands with fingers.
 - **Outfit:** tee, long sleeve, tank, hoodie, jacket; jeans, shorts, skirt;
   sneakers, boots or barefoot; stripes, dots, plaid or a chest emblem.
@@ -86,7 +88,8 @@ avatar.py            entry point
 avatarkit/
   options.py         option tables, presets, share codes, save/load
   mesh.py mathutil.py   mesh primitives (tube, loft, ellipsoid...) and math
-  head.py hair.py    head, face details, hair, hats, facial hair
+  head.py hair.py    head, face details, hair layers, hats, facial hair
+  strands.py         strand growth (physics-lite) and strand mesh builder
   body.py            torso, limbs, clothes, hands, accessories (as rig nodes)
   rig.py poses.py    skeleton and pose / animation functions
   builder.py         assembles an avatar from options
