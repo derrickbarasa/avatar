@@ -6,7 +6,7 @@ import numpy as np
 from . import hair as hair_mod
 from . import strands as strands_mod
 from . import head as head_mod
-from .body import build_body, neck_mesh
+from .body import build_body, garment_bulk, neck_mesh
 from .mathutil import mix
 from .mesh import transformed
 
@@ -61,7 +61,7 @@ def build_avatar(v):
         hat = "none"
     elif hat != "none" and style in ("quiff", "bun", "mohawk", "curly"):
         style = "short"  # keep tall styles from poking through the hat
-    parts = list(_hair(head, style, hair, hat)) + list(_hat(head, hat, tuple(v["hatcolor"])))
+    parts = list(_hair(head, style, hair, hat, garment_bulk(v["top"]))) + list(_hat(head, hat, tuple(v["hatcolor"])))
     node.add([m.outlined() for m in parts])
     node.add(_facial(head, v["facial"], hair))
     if v["glasses"] != "none":

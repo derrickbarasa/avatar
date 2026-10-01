@@ -6,7 +6,7 @@ import numpy as np
 from .head import MOUTH_Y, skull_ring
 from .mathutil import catmull, mix, rot_x, rot_z, smoothstep
 from .mesh import Mesh, ellipsoid, grid_faces, loft, tube, unit_sphere_z
-from .strands import beard_margin, facial_strand_meshes, mustache_margin, strand_meshes
+from .strands import beard_margin, facial_strand_meshes, mustache_margin, strand_meshes, torso_clearance
 
 HAIR = dict(shine=40, spec=0.25, kind="hair")
 
@@ -34,7 +34,7 @@ HAT_LINES = {  # where a hat's lower edge sits at azimuth 0, 60, 110, 180 degree
 }
 
 
-def hair_meshes(head, style, color, hat="none"):
+def hair_meshes(head, style, color, hat="none", clothing=0.035):
     """Strands grown over a darker under-layer (scalp, hair mass) that hides any gaps.
 
     Under a hat there is no hair on the covered scalp: only what grows below the hat's edge is drawn."""
@@ -46,7 +46,8 @@ def hair_meshes(head, style, color, hat="none"):
         margin = np.minimum(margin, np.interp(theta, HAT_ANGLES, HAT_LINES[hat]) - 0.03 - head.Y)
         if (margin > 0.03).sum() < 40:             # nothing left between the hairline and the hat
             return []
-    strands = strand_meshes(head, style, color, margin)
+    with torso_clearance(clothing + 0.015):
+        strands = strand_meshes(head, style, color, margin)
     under = mix(color, (0, 0, 0), 0.38) if strands else color
     out = _under_layer(head, style, under, margin, hat != "none") + strands
     if style == "undercut":                    # the shaved sides: a dark shadow of stubble on the skin

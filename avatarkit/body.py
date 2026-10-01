@@ -12,6 +12,11 @@ LIFT = 0.30  # the body is built with y=0 at the head centre, then raised by thi
 CLOTH = dict(shine=12, spec=0.04, kind="cloth")
 
 
+def garment_bulk(top):
+    """How far the top stands off the skin."""
+    return {"hoodie": 0.07, "jacket": 0.06, "sweater": 0.055}.get(top, 0.035)
+
+
 def torso_keys(bt):
     sh, chest, waist, hip, bust, _ = bt
     mid = (chest + waist) / 2
@@ -241,7 +246,7 @@ def build_body(v):
     radius = math.sqrt(build) * body_type[5]
     torso = Torso(body_type, build)
     sk = dict(kind="skin")
-    bulk = {"hoodie": 0.07, "jacket": 0.06, "sweater": 0.055}.get(style, 0.035)
+    bulk = garment_bulk(style)
     hem = -3.72 if bulk < 0.05 else -3.85
     if dress:
         hem = -3.4

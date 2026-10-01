@@ -770,6 +770,25 @@ class RealismTests(unittest.TestCase):
         self.assertLess(hem_width("Leggings"), hem_width("Jeans"))
         self.assertGreater(hem_width("Wide"), hem_width("Jeans"))
 
+    def test_hair_rests_on_a_thick_hoodie_without_going_through_it(self):
+        from avatarkit.body import LIFT
+        from avatarkit.strands import _TORSO, TORSO_POWER
+        v = default_rig(hair="Long", top="Hoodie")["head"].meshes
+        v = np.concatenate([m.v for m in v if m.strand and m.part == "hair"]).astype(float)
+        v = v[v[:, 1] < -0.75]
+        a, front, back = _TORSO.dims(v[:, 1] - LIFT, 0.07 - 0.03)                   # the hoodie, less the usual 3 cm drift
+        k = (np.abs(v[:, 0]) / a) ** TORSO_POWER + (np.abs(v[:, 2]) / np.where(v[:, 2] > 0, front, back)) ** TORSO_POWER
+        self.assertLess((k < 1.0).mean(), 0.01)
+
+    def test_ears_have_a_rim_a_bowl_and_a_lobe_and_flare_outward(self):
+        from avatarkit.head import ear_meshes
+        for side in (-1, 1):
+            parts = ear_meshes(side, (0.9, 0.7, 0.6))
+            self.assertEqual(len(parts), 4)
+            outer = max(abs(m.v[:, 0]).max() for m in parts)
+            self.assertGreater(outer, 0.5)                                         # sticks out past the skull's side
+            self.assertTrue(all(np.sign(m.v[:, 0].mean()) == side for m in parts))
+
 
 if __name__ == "__main__":
     unittest.main()

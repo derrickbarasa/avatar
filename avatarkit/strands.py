@@ -8,6 +8,7 @@ explicit guide paths. The strands are merged into one mesh whose vertices
 carry the strand tangent (for anisotropic hair highlights) and a per-strand
 colour variation.
 """
+import contextlib
 import math
 import zlib
 
@@ -58,6 +59,17 @@ def make_locks(root, scale=11):
 TORSO_POWER = 2.4                    # the exponent mesh.loft draws the torso's sections with
 _TORSO = Torso((1.0, 1.0, 1.0, 1.0, 0.0, 1.0), 1.0)      # an average body; hair rests on a shirt over it
 _TORSO_CLEARANCE = 0.05
+
+
+@contextlib.contextmanager
+def torso_clearance(value):
+    """Grow hair for a garment this far from the body (a hoodie is thicker than a tee, so hair rests on it)."""
+    global _TORSO_CLEARANCE
+    old, _TORSO_CLEARANCE = _TORSO_CLEARANCE, value
+    try:
+        yield
+    finally:
+        _TORSO_CLEARANCE = old
 SKULL_CLEARANCE = 1.12           # hair keeps this far (in proportion) from the skull: volume, like real hair has
 _SKULL_C = np.array([0.0, HEAD_Y, 0.0])
 

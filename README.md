@@ -5,10 +5,10 @@ meshes and drawn with a cel-shading shader and inked outlines. Pick every
 feature from a tabbed side panel, strike a pose, and export the result.
 
 - **Face:** a skull with a flat-sided cranium, sloping forehead, jaw line and chin (not a ball), with nose, cheekbones, eyes with a procedural iris,
-  eyelids and lashes that blink, ears, nostrils, lips with teeth and tongue, six
+  eyelids and lashes that blink, ears (rim, bowl and lobe), nostrils, lips with teeth and tongue, six
   expressions, freckles, glasses, earrings.
 - **Hair:** fourteen styles built from thousands of real strands (grown from the
-  scalp, clumped into locks, pushed out of the head, shoulders and chest, with
+  scalp, clumped into locks, pushed out of the head, shoulders and chest, in proportion to how thick the top is, with
   anisotropic highlights): short, curly, long, bob, bangs, bun, ponytail, quiff,
   mohawk, afro, pigtails, braid, undercut, wavy. Facial hair is a full beard (sideburns, cheeks, chin and under the jaw, thinning toward
   the cheek line, clear of the lips), or short stubble or a goatee), a moustache, and eyebrows, all strands hugging the skin.

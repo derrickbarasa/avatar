@@ -71,8 +71,11 @@ class Head:
             return g(cx, cy, sx, sy) + g(-cx, cy, sx, sy)
 
         d = 0.06 * nose * g(0, 0.0, 0.04, 0.14)                    # nose bridge
-        d += 0.11 * nose * g(0, -0.20, 0.055, 0.05)                # nose tip
+        d += 0.125 * nose * g(0, -0.20, 0.050, 0.048)              # nose tip
+        d += 0.045 * nose * pair(0.085, -0.215, 0.045, 0.040)      # the wings of the nose
         d += 0.03 * nose * pair(0.08, -0.23, 0.04, 0.035)          # nostrils
+        d += 0.018 * nose * g(0, -0.285, 0.055, 0.03)              # the pad under the nose
+        d -= 0.014 * pair(0.155, -0.235, 0.035, 0.07)              # the fold beside the nose
         d -= 0.035 * pair(EYE_X, EYE_Y, 0.11, 0.075)               # eye sockets
         d += 0.03 * pair(0.2, 0.14, 0.15, 0.04)                    # brow ridge
         d += 0.035 * pair(0.30, -0.12, 0.13, 0.10)                 # cheekbones
@@ -285,12 +288,25 @@ def lip_meshes(head, smile, width, skin, open_=0.0):
 
 
 def ear_meshes(side, skin):
+    """An ear: a flat base, a curled rim (the helix), a darker bowl and a soft lobe. It flares out from the head."""
     rot = rot_y(-side * 0.35)
     inner = tuple(c * 0.72 for c in skin)
-    return [ellipsoid((side * 0.485, -0.09, -0.07), (0.05, 0.11, 0.075), skin,
-                      rot=rot, detail=18, shine=25, spec=0.1, kind="skin"),
-            ellipsoid((side * 0.522, -0.095, -0.055), (0.014, 0.068, 0.042), inner,
-                      rot=rot, detail=14, shine=15, spec=0.05, kind="skin", thin=True)]
+    centre = np.array([side * 0.485, -0.09, -0.07])
+    sk = dict(kind="skin")
+
+    def world(p):
+        return centre + rot @ np.asarray(p, float)
+
+    a = np.radians(np.linspace(-118, 118, 18))
+    rim = np.stack([np.full(len(a), side * 0.022), 0.108 * np.sin(a), -0.072 * np.cos(a) + 0.012], -1)
+    rim_pts = np.array([world(p) for p in rim])
+    radii = 0.016 * np.minimum(1.0, 0.45 + 2.2 * np.sin(np.linspace(0, math.pi, len(a)))) + 0.002
+    return [ellipsoid(world((side * 0.004, 0.0, 0.0)), (0.026, 0.108, 0.074), skin, rot=rot, detail=18, shine=25, spec=0.1, **sk),
+            tube(rim_pts, radii, skin, sides=8, shine=25, spec=0.1, **sk),
+            ellipsoid(world((side * 0.026, -0.005, -0.012)), (0.012, 0.070, 0.045), inner, rot=rot, detail=14, shine=15,
+                      spec=0.05, thin=True, **sk),
+            ellipsoid(world((side * 0.012, -0.112, 0.000)), (0.024, 0.032, 0.028), skin, rot=rot, detail=12, shine=25,
+                      spec=0.1, **sk)]
 
 
 def nostril_meshes(head, skin):
