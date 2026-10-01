@@ -14,7 +14,7 @@ feature from a tabbed side panel, strike a pose, and export the result.
   the cheek line, clear of the lips), moustaches and eyebrows are strands too, hugging the skin.
   Plus hats: the hair under a hat is only what hangs below its edge.
 - **Body:** three body types, build, height, shoulder and hip width, head size and neck
-  length. Arms and legs have elliptical, tapering sections (deltoid, biceps, elbow, forearm flattening
+  length. The torso has a sloping collar, shoulder blades, chest, waist and buttocks. Arms and legs have elliptical, tapering sections (deltoid, biceps, elbow, forearm flattening
   to the wrist, thigh, knee, calf bulging backwards, ankle) with a slight bend, large hands with
   fingers, and shaped feet that join the ankle.
 - **Outfit:** tee, polo, long sleeve, sweater, tank, hoodie, jacket, dress; jeans, shorts, skirt;

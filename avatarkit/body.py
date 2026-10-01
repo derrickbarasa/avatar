@@ -16,16 +16,19 @@ def torso_keys(bt):
     sh, chest, waist, hip, bust, _ = bt
     mid = (chest + waist) / 2
     return np.array([  # y, half-width, front depth, back depth
-        (-1.02, 0.30, 0.27, 0.27),
-        (-1.075, 0.47 * sh, 0.30, 0.30),
-        (-1.15, 0.72 * sh, 0.34, 0.34),
-        (-1.32, 0.90 * sh, 0.40, 0.38),
-        (-1.80, 0.86 * sh * chest, 0.42 + bust, 0.40),
-        (-2.40, 0.72 * mid, 0.37 + bust * 0.4, 0.36),
-        (-3.00, 0.66 * waist, 0.33, 0.32),
-        (-3.60, 0.74 * hip, 0.37, 0.37),
-        (-4.15, 0.76 * hip, 0.38, 0.38),
-        (-4.30, 0.55 * hip, 0.30, 0.30)])
+        (-1.02, 0.30, 0.26, 0.30),                       # base of the neck
+        (-1.075, 0.42 * sh, 0.28, 0.33),                 # the trapezius slopes out to the shoulder...
+        (-1.15, 0.60 * sh, 0.30, 0.37),
+        (-1.26, 0.80 * sh, 0.33, 0.40),
+        (-1.40, 0.93 * sh, 0.37, 0.40),                  # ...the shoulder tip
+        (-1.62, 0.91 * sh * chest, 0.44 + bust * 0.7, 0.42),   # upper chest, shoulder blades
+        (-1.95, 0.84 * sh * chest, 0.49 + bust, 0.40),         # chest
+        (-2.40, 0.70 * mid, 0.38 + bust * 0.4, 0.34),
+        (-3.00, 0.60 * waist, 0.34, 0.27),               # waist: a gentle belly in front, the small of the back
+        (-3.50, 0.72 * hip, 0.37, 0.41),
+        (-3.90, 0.80 * hip, 0.38, 0.50),                 # hips; the buttocks push the back out
+        (-4.15, 0.76 * hip, 0.37, 0.46),
+        (-4.30, 0.55 * hip, 0.30, 0.34)])
 
 
 class Torso:
@@ -149,10 +152,12 @@ def limb_mesh(curve, color, grow=0.0, **kw):
     return limb(curve[:, :3], r, curve[:, 3] * curve[:, 4] + grow, color, off=curve[:, 5], **kw)
 
 
-def limb_joint(key, color, grow=0.0, **kw):
-    """The ball that rounds off a joint, shaped like the limb's section there."""
+def limb_joint(key, color, grow=0.0, flat=1.0, drop=0.0, **kw):
+    """The ball that rounds off a joint, shaped like the limb's section there (`flat` < 1 squashes it
+    and `drop` lowers it: a shoulder that follows the slope of the collar bone)."""
     r = key[3] + grow
-    return ellipsoid(key[:3] + np.array([0.0, 0.0, key[5]]), (r, r, key[3] * key[4] + grow), color, **kw).set(joint=True)
+    return ellipsoid(key[:3] + np.array([0.0, -drop, key[5]]), (r, r * flat, key[3] * key[4] + grow), color,
+                     **kw).set(joint=True)
 
 
 ARM_HUMPS = ((0.22, 1.0, 0.95), (0.27, 2.7, 0.7))     # biceps / deltoid, forearm belly
@@ -283,8 +288,10 @@ def build_body(v):
         hem_y = -5.45 if dress else -5.05
         ys = np.linspace(-3.2, hem_y, 16)
         t = (-ys - 3.2) / (-hem_y - 3.2)
-        a = (0.70 * build + 0.10) + (0.62 if dress else 0.45) * t ** 1.3
-        depth = 0.44 + (0.42 if dress else 0.30) * t ** 1.3
+        ta, tf, tb = torso.dims(np.minimum(ys, -3.2), bulk + 0.03)       # starts at the waist, never narrower than the hips
+        flare = t ** 1.3
+        a = np.maximum(ta[0] + (0.62 if dress else 0.45) * flare, ta)
+        depth = np.maximum(max(tf[0], tb[0]) + (0.50 if dress else 0.38) * flare, np.maximum(tf, tb))
         skirt = loft(ys, a, depth, depth, pcol, cap_ends=False, **CLOTH)
         root.add(garment(skirt) if dress else skirt)
     else:
@@ -344,7 +351,7 @@ def build_body(v):
                              rig.add_node("shin" + name, legk[2, :3], "thigh" + name),
                              rig.add_node("foot" + name, legk[4, :3], "shin" + name))
         up, lo = arm_curve(ak, 16, 0.0, 2.0), arm_curve(ak, 18, 2.0, 4.0)
-        arm.add(limb_mesh(up, skin, **sk), limb_joint(ak[0], skin, **sk))
+        arm.add(limb_mesh(up, skin, **sk), limb_joint(ak[0], skin, flat=0.82, drop=0.04, **sk))
         fore.add(limb_mesh(lo, skin, **sk), limb_joint(ak[2], skin, **sk))
         palm, fingers = hand_parts(ak[4, :3], s, skin)
         hand.add(palm)
@@ -364,7 +371,7 @@ def build_body(v):
                 sl2 = arm_curve(ak, 18, 2.0, 3.95)
                 fore.add(garment(limb_mesh(sl2, tcol, grow, cap_ends=False, **CLOTH)),
                          limb_joint(ak[2], tcol, grow, **CLOTH))
-            arm.add(garment(limb_joint(ak[0], tcol, grow, **CLOTH)))
+            arm.add(garment(limb_joint(ak[0], tcol, grow, flat=0.82, drop=0.04, **CLOTH)))
             if style == "sweater":                # ribbed cuff at the wrist
                 end = arm_curve(ak, 3, 3.9, 3.95)[-1]
                 ang = np.linspace(0, 2 * math.pi, 20)

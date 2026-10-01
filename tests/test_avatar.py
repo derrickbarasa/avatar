@@ -667,6 +667,24 @@ class RealismTests(unittest.TestCase):
                 roots = m.v.reshape(m.n_strands, -1, 3)[:, 0]
                 self.assertLess(roots[:, 1].max(), 0.3)            # no roots up on the covered crown
 
+    def test_torso_has_a_waist_a_chest_and_buttocks(self):
+        from avatarkit.body import Torso
+        torso = Torso(O.resolve(dict(O.DEFAULT_STATE))["bodytype"], 1.0)
+        a, front, back = torso.dims(np.array([-1.95, -3.0, -3.9]))        # chest, waist, hips
+        self.assertLess(a[1], 0.85 * a[0])                                  # the waist is narrower than the chest
+        self.assertGreater(front[0], front[1] + 0.1)                        # the chest stands out in front
+        self.assertGreater(back[2], front[2] + 0.05)                        # the buttocks push the back out
+        shoulder, _, _ = torso.dims(np.array([-1.15, -1.40]))
+        self.assertLess(shoulder[0], 0.7 * shoulder[1])                     # the trapezius slopes out to the shoulder
+
+    def test_skirt_and_dress_cover_the_hips_for_every_body_type(self):
+        for body in ("Masculine", "Neutral", "Feminine"):
+            for top, pants in (("Dress", "Jeans"), ("T-shirt", "Skirt")):
+                root = default_rig(bodytype=body, top=top, pants=pants)["root"]
+                skin, skirt = root.meshes[0].v, root.meshes[-1].v        # the pelvis, and the skirt added last
+                for axis in (0, 2):                                      # across and front to back
+                    self.assertGreaterEqual(np.ptp(skirt[:, axis]), np.ptp(skin[:, axis]), (body, top, axis))
+
 
 if __name__ == "__main__":
     unittest.main()
