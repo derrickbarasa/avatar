@@ -32,7 +32,7 @@ SHORTCUTS = [
     ("Ctrl+S / Ctrl+O", "save / open an avatar"), ("Ctrl+Z / Ctrl+Y", "undo / redo"),
     ("S / G", "save PNG / transparent PNG"), ("E / O", "export GLB / OBJ"),
     ("C / Ctrl+V", "copy / paste share code"), ("P", "import from a photo"),
-    ("T / Enter", "open Talk / speak the text"), ("Esc", "stop speaking"),
+    ("T / Enter", "open Talk / speak the text"), ("Esc", "stop speaking"), ("F11", "full screen on / off"),
     ("Drop a file", "open an .avatar file or a photo"), ("H", "show or hide this sheet"),
 ]
 

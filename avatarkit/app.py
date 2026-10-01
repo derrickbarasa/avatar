@@ -85,7 +85,19 @@ def clipboard_put(text):
 
 
 def open_window(size):
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.SetProcessDPIAware()    # true pixels: the window isn't blown up past the screen
+        except Exception:
+            pass
     pygame.init()
+    try:                                                  # keep the title bar (close/maximize) on screen
+        dw, dh = pygame.display.get_desktop_sizes()[0]
+        size = (min(size[0], dw - 40), min(size[1], dh - 120))
+    except Exception:
+        pass
+    os.environ.setdefault("SDL_VIDEO_WINDOW_POS", "centered")
     wanted = int(os.environ.get("AVATARKIT_MSAA", "8"))     # 0, 2, 4 or 8 samples per pixel
     for samples in [s for s in (8, 4, 2, 0) if s <= wanted]:  # smoothest edges the graphics card allows
         for attr, val in ((pygame.GL_MULTISAMPLEBUFFERS, 1 if samples else 0), (pygame.GL_MULTISAMPLESAMPLES, samples),
@@ -676,6 +688,10 @@ class App:
                 self.redo()
             elif k == pygame.K_v:
                 self.paste_code()
+            return True
+        if k == pygame.K_F11:
+            pygame.display.toggle_fullscreen()
+            self.dirty = True
             return True
         if k == pygame.K_ESCAPE:
             if self.help:
