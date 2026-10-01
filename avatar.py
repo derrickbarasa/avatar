@@ -5,7 +5,7 @@
     python avatar.py --shot out.png --view face --set hair=Long --set skin=Tan
     python avatar.py --sheet 12 --shot gallery.png
 """
-from avatarkit.app import main
+from avatarkit.app import cli
 
 if __name__ == "__main__":
-    main()
+    cli()

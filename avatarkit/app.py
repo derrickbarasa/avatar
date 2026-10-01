@@ -1137,3 +1137,22 @@ def main(argv=None):
             App(args).run()
     except ValueError as exc:
         sys.exit(str(exc))
+
+
+def cli():
+    """The command-line entry point: run, then leave without letting Python tear down the OpenGL objects.
+
+    Everything has been saved by now. On some graphics drivers the garbage collector's final pass over
+    the dead GL buffers crashes the process (an access violation after the work is done), so exit directly."""
+    code = 0
+    try:
+        main()
+    except SystemExit as exc:                      # sys.exit("message") or sys.exit(2) from argparse / main
+        if isinstance(exc.code, str):
+            print(exc.code, file=sys.stderr)
+            code = 1
+        else:
+            code = exc.code or 0
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)

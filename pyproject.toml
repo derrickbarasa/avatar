@@ -14,7 +14,7 @@ dependencies = ["pygame>=2.5", "PyOpenGL>=3.1", "numpy>=1.24"]
 extras = ["opencv-python-headless<5", "imageio-ffmpeg", "sounddevice", "pyvirtualcam"]
 
 [project.scripts]
-avatar-studio = "avatarkit.app:main"
+avatar-studio = "avatarkit.app:cli"
 
 [tool.setuptools]
 packages = ["avatarkit"]
