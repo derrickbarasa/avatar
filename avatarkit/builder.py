@@ -48,6 +48,7 @@ def build_avatar(v):
         node.add(head_mod.ear_meshes(s, skin))
     for mesh in _brows(head, v["brows"], brow_color, brow_dy, brow_tilt):
         brow_nodes[mesh.side].add(mesh)
+    rig.head = head
     rig.mouth = head_mod.Mouth(head, smile, mouth_w, skin)
     rig.base_open = e_open
     rig.add_node("mouth", node.pivot, "head")

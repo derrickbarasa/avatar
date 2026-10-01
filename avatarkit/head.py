@@ -182,7 +182,12 @@ class Mouth:
             self._cache[key] = self._build(key[0] / 24, key[1] / 12, key[2], key[3] / 10)
         return self._cache[key]
 
-    def _build(self, o, wide, press, smile=0.0):
+    def fixed_meshes(self, open_=0.0, wide=0.0, press=0.0, smile=0.0):
+        """Lips for a mouth shape with the same parts and vertex layout whatever the shape (parts a shape
+        would not draw are shrunk to a point). Morph targets need this; `meshes` does not keep one."""
+        return self._build(min(max(open_, 0.0), 1.0), min(max(wide, -1.0), 1.0), press > 0.5, smile, fixed=True)
+
+    def _build(self, o, wide, press, smile=0.0, fixed=False):
         w = self.w0 * (1 + 0.28 * wide)
         xs = np.linspace(-w, w, 33)
         u = xs / w
@@ -198,7 +203,25 @@ class Mouth:
             return np.stack([xs, y, self.z(xs, y) + lift], -1)
 
         out = []
-        if o > 0.05:
+        if fixed:
+            tiny = lambda shown: 1.0 if shown else 1e-3      # a hidden part collapses instead of vanishing
+            zc = float(self.z(0.0, MOUTH_Y)) - 0.015
+            span = float(drop.max())
+            mean = float(corner.mean())
+            cy = MOUTH_Y + mean - 0.45 * span
+            k = tiny(o > 0.05)
+            out.append(tube(path(base, 0.002), (0.005 + 0.003 * fall) * tiny(o <= 0.05), (0.25, 0.10, 0.10), sides=6))
+            out.append(ellipsoid((0, cy, zc), (w * 0.88 * k, (0.008 + 0.56 * span) * k, 0.022 * k),
+                                 (0.22, 0.05, 0.06), detail=20))
+            out.append(ellipsoid((0, MOUTH_Y + mean + 0.4 * float(rise.max()) - 0.004, zc + 0.008),
+                                 (w * 0.62 * (1 - 0.3 * r) * k, 0.011 * k, 0.012 * k), (0.96, 0.95, 0.92), detail=16))
+            k = tiny(o > 0.45)
+            out.append(ellipsoid((0, cy - 0.30 * span, zc + 0.002), (w * 0.40 * k, (0.010 + 0.014 * o) * k, 0.014 * k),
+                                 (0.75, 0.32, 0.36), detail=14))
+            k = tiny(o > 0.6)
+            out.append(ellipsoid((0, cy - 0.85 * span, zc + 0.006), (w * 0.55 * (1 - 0.3 * r) * k, 0.009 * k, 0.011 * k),
+                                 (0.94, 0.93, 0.90), detail=14))
+        elif o > 0.05:
             zc = float(self.z(0.0, MOUTH_Y)) - 0.015
             span = float(drop.max())
             cy = MOUTH_Y + float(corner.mean()) - 0.45 * span

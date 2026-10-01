@@ -273,6 +273,59 @@ class ModelExportTests(LibraryCase):
         self.assertAlmostEqual(min(lows), 0.0, delta=0.06)
         self.assertAlmostEqual(max(highs), 1.65, delta=0.2)
 
+    def accessor_floats(self, doc, blob, index):
+        """Accessor contents as an (N, 3) array, applying a sparse substitution if there is one."""
+        acc = doc["accessors"][index]
+        out = np.zeros((acc["count"], 3), np.float32)
+        if "bufferView" in acc:
+            view = doc["bufferViews"][acc["bufferView"]]
+            out = np.frombuffer(blob, np.float32, acc["count"] * 3, view["byteOffset"]).reshape(-1, 3)
+        return out
+
+    def test_vrm_has_expression_presets_backed_by_morph_targets(self):
+        rig = self.rig(hair="Short")
+        path = os.path.join(self.tmp.name, "a.vrm")
+        export_vrm(rig, path)
+        doc, blob = self.parse(path)
+        presets = doc["extensions"]["VRMC_vrm"]["expressions"]["preset"]
+        for name in ("happy", "angry", "sad", "surprised", "relaxed", "aa", "ih", "ou", "ee", "oh",
+                     "blink", "blinkLeft", "blinkRight"):
+            self.assertIn(name, presets)
+        mesh = doc["meshes"][0]
+        self.assertEqual(mesh["extras"]["targetNames"], list(presets))
+        for bind in (b for p in presets.values() for b in p["morphTargetBinds"]):
+            self.assertEqual(doc["nodes"][bind["node"]]["mesh"], 0)
+            self.assertLess(bind["index"], len(presets))
+        # every primitive carries every target (the glTF rule), each with one offset per vertex
+        for prim in mesh["primitives"]:
+            self.assertEqual(len(prim["targets"]), len(presets))
+            count = doc["accessors"][prim["attributes"]["POSITION"]]["count"]
+            for target in prim["targets"]:
+                self.assertEqual(doc["accessors"][target["POSITION"]]["count"], count)
+
+    def test_vrm_mouth_and_blink_targets_move_the_face(self):
+        rig = self.rig(hair="Short")
+        path = os.path.join(self.tmp.name, "a.vrm")
+        export_vrm(rig, path)
+        doc, blob = self.parse(path)
+        names = doc["meshes"][0]["extras"]["targetNames"]
+        reach = {n: 0.0 for n in names}
+        for prim in doc["meshes"][0]["primitives"]:
+            for name, target in zip(names, prim["targets"]):
+                reach[name] = max(reach[name], float(np.abs(self.accessor_floats(doc, blob, target["POSITION"])).max()))
+        for name in names:
+            self.assertGreater(reach[name], 0.001, name)            # every expression changes something
+            self.assertLess(reach[name], 0.2, name)                 # ... by a believable amount (metres)
+        self.assertGreater(reach["aa"], reach["relaxed"])           # a wide-open mouth moves further
+
+    def test_mouth_shapes_share_one_vertex_layout(self):
+        from avatarkit.head import cached_head, Mouth
+        mouth = Mouth(cached_head((0.9, 0.7, 0.6), 0.0, 0.0), 0.0, 1.0, (0.9, 0.7, 0.6))
+        shapes = [mouth.fixed_meshes(*s) for s in ((0, 0, 0, 0), (1, 0, 0, 0), (0.5, 0.5, 0, 0.5), (0.2, -1, 1, -0.5))]
+        for shape in shapes[1:]:
+            self.assertEqual([m.v.shape for m in shape], [m.v.shape for m in shapes[0]])
+            self.assertEqual([len(m.f) for m in shape], [len(m.f) for m in shapes[0]])
+
     def test_left_side_bones_are_on_positive_x(self):
         rig = self.rig()
         path = os.path.join(self.tmp.name, "a.vrm")

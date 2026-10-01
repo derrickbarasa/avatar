@@ -1,12 +1,14 @@
 """Export the avatar as Wavefront OBJ (pose baked in) or glTF binary (.glb, with rig nodes)."""
 import json
+import math
 import os
 import struct
 
 import numpy as np
 
 from .mathutil import euler_matrix, matrix_to_quat
-from .mesh import strand_faces
+from .mesh import strand_faces, transformed
+from .speech import VISEMES
 
 def compact(verts, normals, faces, colors=None):
     """Drop vertices no triangle uses (hair/hat shells keep the whole head grid).
@@ -57,7 +59,7 @@ class _Buffer:
         self.data = bytearray()
         self.views, self.accessors = [], []
 
-    def add(self, array, target, comp_type, kind, minmax=False):
+    def view(self, array, target=None):
         raw = np.ascontiguousarray(array).tobytes()
         while len(self.data) % 4:
             self.data.append(0)
@@ -66,6 +68,10 @@ class _Buffer:
             view["target"] = target
         self.views.append(view)
         self.data += raw
+        return len(self.views) - 1
+
+    def add(self, array, target, comp_type, kind, minmax=False):
+        self.view(array, target)
         acc = {"bufferView": len(self.views) - 1, "componentType": comp_type,
                "count": int(len(array)), "type": kind}
         if minmax:
@@ -158,6 +164,87 @@ VRM_BONES = {"root": "hips", "torso": "spine", "head": "head",
 VRM_HEIGHT_M = 1.65          # the avatar is about 8.4 units tall
 
 
+# ---------------------------------------------------------------------------
+# VRM expressions (glTF morph targets)
+# ---------------------------------------------------------------------------
+# VRM preset -> (mouth (open, wide, press, smile) added to the resting mouth, brow raise, brow tilt).
+# The numbers follow options.EXPRESSIONS and speech.VISEMES, so the exported faces match the app's.
+VRM_EXPRESSIONS = (
+    [("happy", (0.25, 0.0, 0.0, 0.5), 0.01, 0.0), ("angry", (0.0, 0.0, 0.0, -0.3), -0.03, 0.7),
+     ("sad", (0.0, 0.0, 0.0, -0.5), 0.0, -0.7), ("surprised", (0.9, 0.0, 0.0, 0.0), 0.05, -0.2),
+     ("relaxed", (0.0, 0.0, 0.0, 0.25), 0.0, 0.0)]
+    + [(name, (*VISEMES[v][:3], 0.0), 0.0, 0.0)
+       for name, v in (("aa", "AA"), ("ih", "II"), ("ou", "UU"), ("ee", "EE"), ("oh", "OO"))])
+VRM_BLINKS = ("blink", "blinkLeft", "blinkRight")
+BLINK_DEGREES = 58.0          # the same closed-lid angle the viewport uses
+BROW_TILT_RAD = 0.35          # strands.brow_curve: a tilt of 1 turns the brow by this much about its centre
+BROW_TILT_DROP = 0.015        # ... and lowers the centre by this much
+
+
+def _expression_morphs(rig):
+    """Morph targets for the VRM expressions.
+
+    Returns (names, deltas, mouth_meshes): `deltas` maps id(mesh) to {target index: (N, 3) offsets in
+    rig units}; the mouth is rebuilt with one fixed vertex layout so its shapes can be blended.
+    """
+    names = [e[0] for e in VRM_EXPRESSIONS] + list(VRM_BLINKS)
+    deltas, mouth_meshes = {}, None
+    fx = rig.head_fx
+
+    def put(mesh, index, new):
+        deltas.setdefault(id(mesh), {})[index] = (np.asarray(new, np.float64) - mesh.v).astype(np.float32)
+
+    if rig.mouth is not None and "mouth" in rig.nodes:
+        def shape(o, w, p, s):
+            parts = rig.mouth.fixed_meshes(min(1.0, rig.base_open + o), w, p, s)
+            return [transformed(m, *fx) for m in parts] if fx else parts
+        mouth_meshes = shape(0.0, 0.0, 0.0, 0.0)
+        for i, (_, mouth, _, _) in enumerate(VRM_EXPRESSIONS):
+            for base, tgt in zip(mouth_meshes, shape(*mouth)):
+                put(base, i, tgt.v)
+
+    scale = fx[0] if fx else 1.0
+
+    def follow_face(before, after):
+        """How far the face surface moves in z between two sets of points (brows ride on the forehead)."""
+        if rig.head is None:
+            return 0.0
+        def local(p):                                    # undo a resized / raised head back to head space
+            q = np.asarray(p, np.float64)
+            if fx:
+                q = (q - np.asarray(fx[2]) - np.asarray(fx[1])) / fx[0] + np.asarray(fx[1])
+            return q
+        a, b = local(before), local(after)
+        return (rig.head.z_at_many(b[:, 0], b[:, 1]) - rig.head.z_at_many(a[:, 0], a[:, 1])) * scale
+    for bone, side in (("browL", 1.0), ("browR", -1.0)):
+        node = rig.nodes.get(bone)
+        for m in (node.meshes if node else ()):
+            for i, (_, _, dy, tilt) in enumerate(VRM_EXPRESSIONS):
+                if not (dy or tilt):
+                    continue
+                a = side * BROW_TILT_RAD * tilt
+                d = m.v.astype(np.float64) - node.pivot
+                c, s = math.cos(a), math.sin(a)
+                new = node.pivot + np.column_stack([c * d[:, 0] - s * d[:, 1], s * d[:, 0] + c * d[:, 1], d[:, 2]])
+                new[:, 1] += (dy - BROW_TILT_DROP * tilt) * scale
+                new[:, 2] += follow_face(m.v, new)
+                put(m, i, new)
+
+    for m in rig.nodes["head"].meshes:
+        if not m.anim or m.anim[0] != "blink":
+            continue
+        centre = np.array(m.anim[1], np.float64)
+        a = math.radians(BLINK_DEGREES)
+        d = m.v.astype(np.float64) - centre
+        new = centre + np.column_stack([d[:, 0], d[:, 1] * math.cos(a) - d[:, 2] * math.sin(a),
+                                        d[:, 1] * math.sin(a) + d[:, 2] * math.cos(a)])
+        left = centre[0] > 0                                  # the avatar's left side is +x
+        for k, name in enumerate(VRM_BLINKS):
+            if name == "blink" or (name == "blinkLeft") == left:
+                put(m, len(VRM_EXPRESSIONS) + k, new)
+    return names, deltas, mouth_meshes
+
+
 def _write_glb(path, doc, buf):
     js = json.dumps(doc, separators=(",", ":")).encode()
     js += b" " * (-len(js) % 4)
@@ -200,12 +287,13 @@ def _animations(buf, rig, node_index, clips, scale, root_base):
 
 
 def export_skinned(rig, path, pose=None, name="Avatar", vrm=False, scale=1.0, feet_on_ground=False,
-                   strand_fraction=1.0, clips=None):
+                   strand_fraction=1.0, clips=None, expressions=False):
     """Skinned glTF: bones are the rig nodes (posed like `pose`), every mesh is bound
     to its own bone with weight 1, and the file is written in the bind (rest) pose.
 
     With vrm=True it also carries VRM 1.0 metadata and the humanoid bone map, in metres.
-    `clips` (see clips.py) adds animations that play the rig's bones.
+    `clips` (see clips.py) adds animations that play the rig's bones. `expressions` adds morph targets
+    (face expressions, mouth shapes and blinks) and, with vrm=True, the VRM expression presets.
     """
     pose = pose or {}
     buf = _Buffer()
@@ -256,11 +344,28 @@ def export_skinned(rig, path, pose=None, name="Avatar", vrm=False, scale=1.0, fe
         ibm[joint_of[bone]] = m.T              # glTF matrices are column-major
     ibm_acc = buf.add(ibm, None, FLOAT, "MAT4")
 
+    names, deltas, mouth_meshes = _expression_morphs(rig) if expressions else ([], {}, None)
+    zero_target = {}
+
+    def zero(count):
+        """A morph target that moves nothing: a sparse accessor with one zero entry (no data per vertex)."""
+        if count not in zero_target:
+            if "views" not in zero_target:
+                zero_target["views"] = (buf.view(np.zeros(1, np.uint32)), buf.view(np.zeros(3, np.float32)))
+            idx, val = zero_target["views"]
+            buf.accessors.append({"componentType": FLOAT, "count": count, "type": "VEC3",
+                                  "min": [0.0, 0.0, 0.0], "max": [0.0, 0.0, 0.0],
+                                  "sparse": {"count": 1, "indices": {"bufferView": idx, "componentType": UINT},
+                                             "values": {"bufferView": val}}})
+            zero_target[count] = len(buf.accessors) - 1
+        return zero_target[count]
+
     prims = []
     for bone, node in rig.nodes.items():
-        for m in node.meshes:
-            v, n, f, cols = compact((m.v + shift.astype(np.float32)) * scale, m.n,
-                                    strand_faces(m, strand_fraction), m.colors)
+        for m in (mouth_meshes if mouth_meshes is not None and bone == "mouth" else node.meshes):
+            faces = strand_faces(m, strand_fraction)
+            used = np.unique(faces)
+            v, n, f, cols = compact((m.v + shift.astype(np.float32)) * scale, m.n, faces, m.colors)
             attrs = {"POSITION": buf.add(v.astype(np.float32), ARRAY_BUFFER, FLOAT, "VEC3", minmax=True),
                      "NORMAL": buf.add(n, ARRAY_BUFFER, FLOAT, "VEC3")}
             if cols is not None:
@@ -271,8 +376,14 @@ def export_skinned(rig, path, pose=None, name="Avatar", vrm=False, scale=1.0, fe
             weights[:, 0] = 1.0
             attrs["JOINTS_0"] = buf.add(joints, ARRAY_BUFFER, USHORT, "VEC4")
             attrs["WEIGHTS_0"] = buf.add(weights, ARRAY_BUFFER, FLOAT, "VEC4")
-            prims.append({"attributes": attrs, "material": material(m),
-                          "indices": buf.add(f, ELEMENT_BUFFER, UINT, "SCALAR")})
+            prim = {"attributes": attrs, "material": material(m),
+                    "indices": buf.add(f, ELEMENT_BUFFER, UINT, "SCALAR")}
+            if names:
+                moves = deltas.get(id(m), {})
+                prim["targets"] = [
+                    {"POSITION": buf.add(moves[i][used] * scale, ARRAY_BUFFER, FLOAT, "VEC3", minmax=True)} if i in moves
+                    else {"POSITION": zero(len(v))} for i in range(len(names))]
+            prims.append(prim)
 
     animations = _animations(buf, rig, node_index, clips, scale, world_pivot(rig.root)) if clips else []
     mesh_node = len(nodes)
@@ -286,6 +397,9 @@ def export_skinned(rig, path, pose=None, name="Avatar", vrm=False, scale=1.0, fe
            "buffers": [{"byteLength": len(buf.data)}]}
     if animations:
         doc["animations"] = animations
+    if names:
+        doc["meshes"][0]["weights"] = [0.0] * len(names)
+        doc["meshes"][0]["extras"] = {"targetNames": names}
     if vrm:
         bones = {VRM_BONES[n]: {"node": node_index[n]} for n in VRM_BONES if n in node_index}
         doc["extensionsUsed"] = ["VRMC_vrm"]
@@ -297,13 +411,18 @@ def export_skinned(rig, path, pose=None, name="Avatar", vrm=False, scale=1.0, fe
                      "avatarPermission": "everyone", "commercialUsage": "personalNonProfit",
                      "creditNotation": "unnecessary", "modification": "allowModification"},
             "humanoid": {"humanBones": bones}}}
+        if names:
+            doc["extensions"]["VRMC_vrm"]["expressions"] = {"preset": {
+                name: {"morphTargetBinds": [{"node": mesh_node, "index": i, "weight": 1.0}]}
+                for i, name in enumerate(names)}}
     _write_glb(path, doc, buf)
 
 
 def export_vrm(rig, path, pose=None, name="Avatar", strand_fraction=0.35, clips=None):
-    """VRM 1.0 humanoid (metres, feet on the ground). Expressions/blendshapes are not included.
+    """VRM 1.0 humanoid (metres, feet on the ground) with the expression presets happy, angry, sad,
+    surprised, relaxed, the mouth shapes aa ih ou ee oh and blink / blinkLeft / blinkRight as morph targets.
 
     Hair strands are thinned to `strand_fraction` because avatar apps prefer small meshes.
     `clips` adds animations (the file still opens as a normal VRM)."""
     export_skinned(rig, path, pose, name=name, vrm=True, scale=VRM_HEIGHT_M / 8.4, feet_on_ground=True,
-                   strand_fraction=strand_fraction, clips=clips)
+                   strand_fraction=strand_fraction, clips=clips, expressions=True)

@@ -124,8 +124,10 @@ Long hair and beards are thinned on export to keep files a sensible size.
 - **Animated GLB** is the skinned model plus animations: the current pose's loop (walk and
   dance are full cycles, other poses idle for four seconds) and the nine emotes, each as its own
   clip. The bundle's skinned GLB carries the same animations.
-- **VRM 1.0** is a humanoid with the standard bone map, in metres, feet on the ground.
-  Expressions/blend shapes are not included yet.
+- **VRM 1.0** is a humanoid with the standard bone map, in metres, feet on the ground, plus the
+  expression presets as morph targets: happy, angry, sad, surprised, relaxed, the mouth shapes
+  aa / ih / ou / ee / oh, and blink / blinkLeft / blinkRight. They are measured from your avatar's
+  own face, so it starts from the expression you picked.
 - **OBJ + MTL** bakes the current pose into one static mesh per part.
 - **Bundle** is a zip with every format, the `.avatar` file and a preview.
 - **PNG / transparent PNG** is the viewport.
@@ -157,7 +159,7 @@ packs are reported at startup and never stop the good ones loading.
 
 ## Not done yet
 
-Neural/offline TTS, microphone input, BVH import, VRM expressions (blend shapes), landmark-based
+Neural/offline TTS, microphone input, BVH import, VRM look-at, landmark-based
 photo matching, a virtual webcam, and true screen-space ambient occlusion (the current one is a
 soft overhead shadow). Automated tests run on Windows, macOS and Linux CI, but the interactive
 window has only been used on Windows.

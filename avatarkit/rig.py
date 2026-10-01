@@ -32,6 +32,7 @@ class Rig:
         self.root = None
         self.ground_y = -7.3
         self.mouth = None          # head.Mouth, set by the builder
+        self.head = None           # head.Head whose surface the face parts follow (set by the builder)
         self.base_open = 0.0       # resting openness from the chosen expression
         self._mouth_key = None
         self.head_fx = None        # (scale, origin, shift) applied to the head parts, or None
