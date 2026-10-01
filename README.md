@@ -15,8 +15,8 @@ feature from a tabbed side panel, strike a pose, and export the result.
   Plus hats: the hair under a hat is only what hangs below its edge.
 - **Body:** three body types, build, height, shoulder and hip width, head size and neck
   length. The torso has a sloping collar, shoulder blades, chest, waist and buttocks. Arms and legs have elliptical, tapering sections (deltoid, biceps, elbow, forearm flattening
-  to the wrist, thigh, knee, calf bulging backwards, ankle) with a slight bend, large hands with
-  fingers, and shaped feet that join the ankle.
+  to the wrist, thigh, knee, calf bulging backwards, ankle) with a slight bend, hands with a
+  tapering palm, rounded knuckles and fingertips and a thumb that curl into a fist, and shaped feet that join the ankle.
 - **Outfit:** tee, polo, long sleeve, sweater, tank, hoodie, jacket, dress; jeans, shorts, skirt;
   sneakers, boots or barefoot; stripes, dots, plaid or a chest emblem.
 - **Extras:** necklace, scarf, watch, backpack (a rounded bag with a lid flap and pocket, straps over the shoulders).

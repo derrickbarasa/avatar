@@ -5,7 +5,7 @@ import numpy as np
 
 from .head import GOLD
 from .mathutil import catmull, mix, rot_z
-from .mesh import ellipsoid, limb, loft, ring_mesh, tube
+from .mesh import ellipsoid, limb, loft, merge, ring_mesh, tube
 from .rig import Rig
 
 LIFT = 0.30  # the body is built with y=0 at the head centre, then raised by this much
@@ -63,29 +63,46 @@ def neck_mesh(skin, lift=0.0):
 FINGER_CODES = ("th", "ix", "md", "rg", "pk")      # thumb, index, middle, ring, pinky
 
 
-def hand_parts(wrist, side, skin):
+def hand_parts(wrist, side, skin, size=1.0):
     """Palm mesh plus each finger as (code, proximal mesh, distal mesh, knuckle, joint) pieces.
 
     Fingers hang down from the wrist with the palm facing the body; the proximal piece bends
     about the knuckle and the distal piece about the middle joint, so a fist can really curl.
+    The palm starts as wide as the forearm's wrist and widens to the knuckles; knuckles, joints and
+    fingertips are rounded, and the thumb lies along the front edge of the palm.
     """
     wx, wy, wz = wrist
-    k = 1.5  # hand scale, so the hands match the forearm width
+    k = 1.5 * size  # hand scale, so the hands match the forearm width
     sk = dict(kind="skin")
-    palm = ellipsoid((wx, wy - 0.10 * k, wz), (0.045 * k, 0.095 * k, 0.075 * k), skin, detail=16, **sk)
+
+    def ball(centre, r):
+        return ellipsoid(centre, (r,) * 3, skin, detail=10, **sk)
+
+    # palm: thickness (x) and width (z) per section, from the wrist to the knuckles
+    ys = np.array([-0.04, 0.03, 0.10, 0.165, 0.205]) * k          # starts a little inside the forearm
+    pts = np.column_stack([np.full(5, wx), wy - ys, np.full(5, wz)])
+    palm = merge([limb(pts, np.array([0.057, 0.052, 0.050, 0.047, 0.040]) * k,
+                       np.array([0.079, 0.083, 0.089, 0.093, 0.090]) * k, skin, sides=16, **sk),
+                  ellipsoid((wx, wy - 0.085 * k, wz + 0.055 * k), (0.040 * k, 0.078 * k, 0.050 * k), skin,
+                            detail=12, **sk)])                       # the pad at the base of the thumb
     fingers = []
-    for code, dz, length in zip(FINGER_CODES[1:], (-0.05, -0.017, 0.017, 0.05), (0.12, 0.14, 0.13, 0.10)):
-        base = np.array([wx, wy - 0.17 * k, wz + dz * k])
+    for code, dz, length in zip(FINGER_CODES[1:], (-0.062, -0.021, 0.021, 0.060), (0.125, 0.145, 0.135, 0.105)):
+        base = np.array([wx, wy - 0.20 * k, wz + dz * k])
         mid = base + np.array([0.0, -0.55 * length * k, 0.0])
         tip = base + np.array([0.0, -length * k, 0.0])
-        prox = tube(np.linspace(base, mid, 4), np.linspace(0.02, 0.0165, 4) * k, skin, sides=8, thin=True, **sk)
-        dist = tube(np.linspace(mid, tip, 4), np.linspace(0.0165, 0.013, 4) * k, skin, sides=8, thin=True, **sk)
+        r0, r1, r2 = 0.0225 * k, 0.0185 * k, 0.0135 * k
+        prox = merge([tube(np.linspace(base, mid, 5), np.linspace(r0, r1, 5), skin, sides=10, thin=True, **sk),
+                      ball(base, r0)])                                # the knuckle
+        dist = merge([tube(np.linspace(mid, tip, 5), np.linspace(r1, r2, 5), skin, sides=10, thin=True, **sk),
+                      ball(mid, r1), ball(tip, r2)])                  # the joint and a rounded tip
         fingers.append((code, prox, dist, base, mid))
-    t0 = np.array([wx - side * 0.01, wy - 0.06 * k, wz + 0.06 * k])
-    t1 = np.array([wx - side * 0.02 * k, wy - 0.11 * k, wz + 0.10 * k])
-    t2 = np.array([wx - side * 0.03 * k, wy - 0.17 * k, wz + 0.115 * k])
-    prox = tube(np.linspace(t0, t1, 4), np.linspace(0.024, 0.02, 4) * k, skin, sides=8, thin=True, **sk)
-    dist = tube(np.linspace(t1, t2, 4), np.linspace(0.02, 0.015, 4) * k, skin, sides=8, thin=True, **sk)
+    t0 = np.array([wx, wy - 0.085 * k, wz + 0.080 * k])
+    t1 = np.array([wx - side * 0.012 * k, wy - 0.150 * k, wz + 0.118 * k])
+    t2 = np.array([wx - side * 0.024 * k, wy - 0.215 * k, wz + 0.128 * k])
+    prox = merge([tube(np.linspace(t0, t1, 5), np.linspace(0.028, 0.023, 5) * k, skin, sides=10, thin=True, **sk),
+                  ball(t0, 0.028 * k)])
+    dist = merge([tube(np.linspace(t1, t2, 5), np.linspace(0.023, 0.0165, 5) * k, skin, sides=10, thin=True, **sk),
+                  ball(t1, 0.023 * k), ball(t2, 0.0165 * k)])
     fingers.insert(0, ("th", prox, dist, t0, t1))
     return palm, fingers
 
@@ -374,7 +391,7 @@ def build_body(v):
         up, lo = arm_curve(ak, 16, 0.0, 2.0), arm_curve(ak, 18, 2.0, 4.0)
         arm.add(limb_mesh(up, skin, **sk), limb_joint(ak[0], skin, flat=0.82, drop=0.04, **sk))
         fore.add(limb_mesh(lo, skin, **sk), limb_joint(ak[2], skin, **sk))
-        palm, fingers = hand_parts(ak[4, :3], s, skin)
+        palm, fingers = hand_parts(ak[4, :3], s, skin, radius)
         hand.add(palm)
         for code, prox, dist, knuckle, joint in fingers:
             pn = rig.add_node(f"{code}1{name}", knuckle, "hand" + name)

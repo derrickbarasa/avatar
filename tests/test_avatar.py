@@ -697,6 +697,25 @@ class RealismTests(unittest.TestCase):
             k = (np.abs(v[:, 0]) / a) ** TORSO_POWER + (np.abs(v[:, 2]) / np.where(v[:, 2] > 0, front, back)) ** TORSO_POWER
             self.assertLess((k < 1.0).mean(), 0.01, hair)                 # <1% of it is more than 3 cm inside the body
 
+    def test_hand_has_a_palm_that_widens_to_the_knuckles_and_tapering_fingers(self):
+        from avatarkit.body import FINGER_CODES, hand_parts
+        palm, fingers = hand_parts((1.0, -4.0, 0.2), 1, (0.9, 0.7, 0.6))
+        self.assertEqual([f[0] for f in fingers], list(FINGER_CODES))
+        wrist = palm.v[np.abs(palm.v[:, 1] - -3.97) < 0.04]
+        knuckle = palm.v[np.abs(palm.v[:, 1] - (-4.0 - 0.165 * 1.5)) < 0.04]
+        self.assertGreater(np.ptp(knuckle[:, 2]), 0.9 * np.ptp(wrist[:, 2]))      # the width holds out to the knuckles
+        for code, prox, dist, knuckle_at, joint_at in fingers:
+            self.assertGreater(dist.v[:, 1].min(), -4.0 - 0.6)                    # a sensible length
+            self.assertLess(dist.v[:, 1].min(), joint_at[1])                      # it reaches past its joint
+        thumb = fingers[0]
+        self.assertGreater(thumb[3][2], 0.2 + 0.05)                               # the thumb starts on the front edge
+
+    def test_hands_scale_with_the_body(self):
+        from avatarkit.body import hand_parts
+        small = hand_parts((0, 0, 0), 1, (0.9, 0.7, 0.6), 0.8)[0]
+        big = hand_parts((0, 0, 0), 1, (0.9, 0.7, 0.6), 1.2)[0]
+        self.assertGreater(np.ptp(big.v[:, 1]), 1.3 * np.ptp(small.v[:, 1]))
+
 
 if __name__ == "__main__":
     unittest.main()
