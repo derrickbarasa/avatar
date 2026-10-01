@@ -1,6 +1,7 @@
 """OpenGL rendering: cel-shaded materials with procedural detail, cast shadows, inked
 outlines, skeleton drawing, level-of-detail for hair, camera and screenshots."""
 import math
+import weakref
 
 import numpy as np
 import pygame
@@ -450,6 +451,8 @@ class Renderer:
         self.px_scale = 1.0            # outline width multiplier when supersampling
         self.quality = 1.0
         self.offscreen = None
+        self._buffers = weakref.WeakKeyDictionary()   # mesh -> its vertex data on the graphics card
+        self._dead = []                               # buffers of meshes that no longer exist, freed on the next frame
         glEnable(GL_MULTISAMPLE)
         glEnable(GL_DEPTH_TEST)
         glDisable(GL_LIGHTING)
@@ -480,6 +483,7 @@ class Renderer:
         camera direction: a second picture of the frame that was just drawn).
         """
         self.quality = quality
+        self._free_dead_buffers()
         w, h = size
         self.view_h = float(h)
         self.blink, self.gaze, self.lid, self.jaw, self.swing = blink, gaze, lid, jaw, swing
@@ -685,16 +689,52 @@ class Renderer:
         glUniform1f(u["uJawShift"], m.jaw_shift if m.jaw_follow else 0.0)
         glUniform1f(u["uStrandScale"], self.strand_scale if m.strand else 1.0)
 
+    def _gpu(self, m):
+        """The mesh's buffers on the graphics card, uploaded once. Meshes never change after they are built,
+        so every later frame only draws from them instead of sending a million triangles again."""
+        g = self._buffers.get(m)
+        if g is None:
+            def upload(array, target=GL_ARRAY_BUFFER):
+                buf = int(glGenBuffers(1))
+                glBindBuffer(target, buf)
+                glBufferData(target, array.nbytes, array, GL_STATIC_DRAW)
+                return buf
+
+            g = {"v": upload(np.ascontiguousarray(m.v, np.float32)), "n": upload(np.ascontiguousarray(m.n, np.float32)),
+                 "f": upload(np.ascontiguousarray(m.f, np.uint32), GL_ELEMENT_ARRAY_BUFFER)}
+            if m.colors is not None:
+                g["c"] = upload(np.ascontiguousarray(m.colors, np.float32))
+            if m.tangents is not None:
+                g["t"] = upload(np.ascontiguousarray(m.tangents, np.float32))
+            if m.strand_aux is not None:
+                g["a"] = upload(np.ascontiguousarray(m.strand_aux, np.float32))
+            glBindBuffer(GL_ARRAY_BUFFER, 0)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0)
+            self._buffers[m] = g
+            weakref.finalize(m, self._dead.extend, list(g.values()))
+        return g
+
+    def _free_dead_buffers(self):
+        if self._dead:
+            glDeleteBuffers(len(self._dead), self._dead)
+            self._dead.clear()
+
     def _arrays(self, m):
-        glVertexPointer(3, GL_FLOAT, 0, m.v)
-        glNormalPointer(GL_FLOAT, 0, m.n)
-        if m.strand_aux is not None:
+        g = self._gpu(m)
+        glBindBuffer(GL_ARRAY_BUFFER, g["v"])
+        glVertexPointer(3, GL_FLOAT, 0, None)
+        glBindBuffer(GL_ARRAY_BUFFER, g["n"])
+        glNormalPointer(GL_FLOAT, 0, None)
+        if "a" in g:
             glClientActiveTexture(GL_TEXTURE1)
             glEnableClientState(GL_TEXTURE_COORD_ARRAY)
-            glTexCoordPointer(2, GL_FLOAT, 0, m.strand_aux)
+            glBindBuffer(GL_ARRAY_BUFFER, g["a"])
+            glTexCoordPointer(2, GL_FLOAT, 0, None)
             glClientActiveTexture(GL_TEXTURE0)
         else:
             glMultiTexCoord2f(GL_TEXTURE1, 0.0, 0.0)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g["f"])
+        return g
 
     @staticmethod
     def _release(m):
@@ -702,6 +742,8 @@ class Renderer:
             glClientActiveTexture(GL_TEXTURE1)
             glDisableClientState(GL_TEXTURE_COORD_ARRAY)
             glClientActiveTexture(GL_TEXTURE0)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0)
 
     def _draw_depth(self, m):
         # shadows are soft, so the shadow pass draws far fewer (thicker) strands than the picture
@@ -710,7 +752,7 @@ class Renderer:
         if m.strand:
             glUniform1f(self.du["uStrandScale"], 1.0 / math.sqrt(lod))
         self._arrays(m)
-        glDrawElements(GL_TRIANGLES, self._count(m, lod), GL_UNSIGNED_INT, m.f)
+        glDrawElements(GL_TRIANGLES, self._count(m, lod), GL_UNSIGNED_INT, None)
         self._release(m)
 
     def _draw_outline(self, m):
@@ -720,7 +762,7 @@ class Renderer:
         glUniform3f(self.ou["uOutline"], *(c * 0.30 for c in m.color))
         self._mesh_displacement(self.ou, m)
         self._arrays(m)
-        glDrawElements(GL_TRIANGLES, self._count(m), GL_UNSIGNED_INT, m.f)
+        glDrawElements(GL_TRIANGLES, self._count(m), GL_UNSIGNED_INT, None)
         self._release(m)
 
     def _draw_mesh(self, m):
@@ -734,18 +776,20 @@ class Renderer:
         glUniform3f(u["uCenter"], *m.center)
         glUniform1f(u["uStrand"], 1.0 if m.strand else 0.0)
         self._mesh_displacement(u, m)
-        self._arrays(m)
+        g = self._arrays(m)
         if m.tangents is not None:
             glEnableClientState(GL_TEXTURE_COORD_ARRAY)
-            glTexCoordPointer(3, GL_FLOAT, 0, m.tangents)
+            glBindBuffer(GL_ARRAY_BUFFER, g["t"])
+            glTexCoordPointer(3, GL_FLOAT, 0, None)
         else:
             glMultiTexCoord3f(GL_TEXTURE0, 0.0, 1.0, 0.0)
         if m.colors is not None:
             glEnableClientState(GL_COLOR_ARRAY)
-            glColorPointer(m.colors.shape[1], GL_FLOAT, 0, m.colors)
+            glBindBuffer(GL_ARRAY_BUFFER, g["c"])
+            glColorPointer(m.colors.shape[1], GL_FLOAT, 0, None)
         else:
             glColor3f(*m.color)
-        glDrawElements(GL_TRIANGLES, self._count(m), GL_UNSIGNED_INT, m.f)
+        glDrawElements(GL_TRIANGLES, self._count(m), GL_UNSIGNED_INT, None)
         if m.colors is not None:
             glDisableClientState(GL_COLOR_ARRAY)
         if m.tangents is not None:

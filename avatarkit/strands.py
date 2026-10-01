@@ -281,7 +281,7 @@ def _group_long(head, margin, rng, steps, y_end, n, tuck, wave, keep=None, sweep
     length = _hem_length(root, y_end, rng)
     paths = grow(root, nrm, d0, length, steps, rng, locks, gravity=0.6, wave=wave, tuck=tuck,
                  jitter=0.25, floor=0.22, lift=-0.05)
-    return smooth(paths, 3), locks, 0.0135
+    return smooth(paths, 2), locks, 0.0135
 
 
 def _group_fringe(head, margin, rng, steps):
@@ -291,7 +291,7 @@ def _group_fringe(head, margin, rng, steps):
     locks = make_locks(root)
     length = 0.32 * (0.9 + 0.2 * rng.random(len(root)))
     paths = grow(root, nrm, d0, length, steps, rng, locks, gravity=0.5, jitter=0.1, lift=0.3)
-    return smooth(paths, 3), locks, 0.011
+    return smooth(paths, 2), locks, 0.011
 
 
 def _group_quiff(head, margin, rng, steps):
