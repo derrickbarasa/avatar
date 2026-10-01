@@ -33,7 +33,7 @@ SHORTCUTS = [
     ("S / G", "save PNG / transparent PNG"), ("E / O", "export GLB / OBJ"),
     ("C / Ctrl+V", "copy / paste share code"), ("P", "import from a photo"),
     ("T / Enter", "open Talk / speak the text"), ("Esc", "stop speaking"), ("F11", "full screen on / off"),
-    ("M / W", "microphone lip-sync / virtual webcam"),
+    ("M / W / F", "microphone / virtual webcam / face tracking"),
     ("Drop a file", "open an .avatar file or a photo"), ("H", "show or hide this sheet"),
 ]
 
@@ -75,6 +75,7 @@ class UIModel:
     mic_on: bool = False          # lip-sync from the microphone
     webcam_on: bool = False       # sending to the virtual webcam
     webcam_fps: int = 0           # how many frames per second it is really delivering
+    track_on: bool = False        # the avatar follows your face
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +305,8 @@ class UI:
             (("live", "mic"), "Microphone  " + ("on" if m.mic_on else "off"), "primary" if m.mic_on else "chip"),
             (("live", "webcam"), "Virtual webcam  " + (f"on, {m.webcam_fps} fps" if m.webcam_on and m.webcam_fps else
                                                        "on" if m.webcam_on else "off"),
-             "primary" if m.webcam_on else "chip")])
+             "primary" if m.webcam_on else "chip"),
+            (("live", "track"), "Face tracking  " + ("on" if m.track_on else "off"), "primary" if m.track_on else "chip")])
         return items, y + 14
 
     def layout_library(self, width, m):

@@ -28,8 +28,9 @@ feature from a tabbed side panel, strike a pose, and export the result.
   pressed, teeth and tongue) timed to the audio, and while it talks it nods on
   stressed syllables, raises its brows, gestures with its hands, holds eye
   contact and turns to face you.
-- **Live:** the avatar can follow your microphone (mouth, nods and gestures) and appear as a
-  virtual webcam in Zoom, Teams, Meet or OBS.
+- **Live:** the avatar can follow your face from a webcam (head, eyes, blinks, mouth, brows),
+  follow your microphone (mouth, nods and gestures), and appear as a virtual webcam in Zoom, Teams, Meet
+  or OBS.
 - **Presets and sharing:** eight outfit presets, and a short share code that
   captures a whole avatar.
 
@@ -80,7 +81,7 @@ Everything you make lives in one folder, `~/Documents/AvatarStudio` (override wi
 | S / G | save PNG / transparent PNG |
 | E / O / B | export GLB / OBJ + MTL / full bundle (zip) |
 | C / Ctrl+V | copy share code / load from the clipboard |
-| M / W | microphone lip-sync / virtual webcam on or off |
+| M / W / F | microphone lip-sync / virtual webcam / face tracking on or off |
 | P | pick a photo and set skin tone, hair colour and length, facial hair |
 | K / L | save / load `avatar.json` |
 
@@ -104,10 +105,18 @@ python avatar.py --shot mouth.png --say "Hello there" --time 0.4   # the lips 0.
 python avatar.py --shot ooh.png --view face --viseme OO      # hold one mouth shape
 ```
 
-## Live: microphone and virtual webcam
+## Live: face tracking, microphone and virtual webcam
 
-Both are switched on in the **Talk** tab (Live section), with **M** / **W**, or from the command line
-(`--mic`, `--webcam`). They need two optional packages, `pip install sounddevice pyvirtualcam`.
+Switch them on in the **Talk** tab (Live section), with **F** / **M** / **W**, or from the command line
+(`--track`, `--mic`, `--webcam`). They need optional packages: `pip install mediapipe` for face tracking,
+`sounddevice` for the microphone and `pyvirtualcam` for the virtual webcam.
+
+- **Face tracking:** the avatar copies your head turn, nod and tilt, your blinks, eye direction, mouth
+  (open, wide, smile) and brow height. It opens the camera and a face-landmark model (MediaPipe's face
+  mesh) in the background, then spends about a second learning your neutral face, so look at the camera
+  with a relaxed face when it starts. It works as a mirror: turn your head to your right and the avatar
+  turns toward the right of the screen (`--no-mirror` for the other way). `--camera N` picks the camera,
+  `--list-cameras` lists them. While you speak a line or use the microphone, those drive the mouth instead.
 
 - **Microphone:** the mouth follows what you say, with no text needed. Loudness sets how far it opens,
   the vowel (the sound's two main frequency peaks) picks "ah", "oo" or "ee" shapes, and hissy sounds give
@@ -186,7 +195,7 @@ packs are reported at startup and never stop the good ones loading.
 ## Not done yet
 
 Neural/offline TTS, BVH import, VRM look-at, landmark-based
-photo matching, head tracking from a real webcam, and true screen-space ambient occlusion (the current one is a
+photo matching, tracking more than one face, and true screen-space ambient occlusion (the current one is a
 soft overhead shadow). Automated tests run on Windows, macOS and Linux CI, but the interactive
 window has only been used on Windows.
 
@@ -220,5 +229,6 @@ avatarkit/
   photo.py           photo -> option suggestions
   speech.py tts.py   text -> mouth shapes and lip-sync timeline; system text-to-speech
   live.py            microphone lip-sync and the virtual webcam
+  tracking.py        face tracking: landmarks -> head, eyes, mouth and brows
 tests/               python -m unittest discover -s tests
 ```

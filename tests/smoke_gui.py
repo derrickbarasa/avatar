@@ -210,4 +210,42 @@ assert a.mic.shape().open > 0.3 and a.jaw > 0.03, (a.mic.shape(), a.jaw)
 click(("live", "webcam"))
 assert a.webcam is None
 a.stop_live()
+
+# -- face tracking (stand-in camera and landmark model) ---------------------------------------------------------
+sys.path.insert(0, os.path.dirname(__file__))
+import test_tracking as TT  # noqa: E402
+
+sys.modules["cv2"] = types.SimpleNamespace(CAP_DSHOW=700, CAP_PROP_FRAME_WIDTH=3, CAP_PROP_FRAME_HEIGHT=4,
+                                           COLOR_BGR2RGB=4, VideoCapture=TT.FakeCapture, cvtColor=lambda f, c: f)
+
+
+class StandInMesh(TT.FakeMesh):
+    expressive = False                      # a neutral face while it calibrates, then a turned, blinking, shouting one
+
+    def process(self, rgb):
+        pts = TT.face(yaw=25, mouth=1.0, eyes=0.2) if StandInMesh.expressive else TT.face()
+        landmarks = [types.SimpleNamespace(x=x, y=y, z=z) for x, y, z in pts]
+        return types.SimpleNamespace(multi_face_landmarks=[types.SimpleNamespace(landmark=landmarks)])
+
+
+sys.modules["mediapipe"] = types.SimpleNamespace(solutions=types.SimpleNamespace(
+    face_mesh=types.SimpleNamespace(FaceMesh=StandInMesh)))
+a.args.no_mirror = True
+click(("live", "track"))
+t0 = time.time()
+while not a.track_ready and time.time() - t0 < 15:
+    frame()
+    time.sleep(0.02)
+assert a.track_ready, a.message
+StandInMesh.expressive = True
+t0 = time.time()
+while a.tracker.state().yaw < 20 and time.time() - t0 < 5:
+    frame()
+    time.sleep(0.02)
+time.sleep(0.3)
+pose, blink, gaze, lid = a.live_state(a.clock_time())
+assert pose["head"][1] > 10, pose["head"]
+assert blink > 40 and a.jaw > 0.05, (blink, a.jaw)
+click(("live", "track"))
+assert a.tracker is None
 print("smoke_gui ok")

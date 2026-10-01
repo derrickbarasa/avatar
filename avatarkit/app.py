@@ -5,13 +5,14 @@ import os
 import random
 import sys
 import tempfile
+import threading
 import time
 
 import numpy as np
 import pygame
 
 from . import options as O
-from . import live, packs, recorder
+from . import live, packs, recorder, tracking
 from . import speech as speech_mod
 from . import clips, store, tts
 from .builder import build_avatar
@@ -147,6 +148,8 @@ class App:
         self.hair, self.jaw, self.last_t = HairSwing(), 0.0, None
         self.mic, self.webcam = None, None      # live.LiveVoice / live.VirtualCam while switched on
         self.feed_cam = None                    # the virtual webcam's camera
+        self.tracker, self.track_start = None, None   # tracking.FaceTracker, and the thread that opens it
+        self.track_error, self.track_ready = "", False
         self.rig_cache = {}
         self.message, self.message_until = "", 0.0
         self.dirty, self.dragging = True, False
@@ -182,6 +185,8 @@ class App:
                 self.toggle_mic()
             if args.webcam:
                 self.toggle_webcam()
+            if args.track:
+                self.toggle_track()
 
     # ---- state ---------------------------------------------------------------------
     def setup_state(self, args):
@@ -545,7 +550,7 @@ class App:
     # ---- live: microphone and virtual webcam --------------------------------------------------
     @property
     def live_on(self):
-        return self.mic is not None or self.webcam is not None
+        return self.mic is not None or self.webcam is not None or self.tracker is not None
 
     def toggle_mic(self):
         """Lip-sync from the microphone: the avatar's mouth, nods and gestures follow your voice."""
@@ -579,9 +584,44 @@ class App:
         self.feed_cam = Camera("webcam")                # its own framing; turns with the window's camera
         self.notify(f'Virtual webcam on: choose "{cam.name}" in your meeting app')
 
+    def toggle_track(self):
+        """Follow your face with the camera: head, eyes, blinks, mouth and brows. The camera and the face model open
+        on a background thread (they take a moment), then there is a second of calibration to learn your neutral face."""
+        if self.tracker is not None:
+            self.stop_live("tracker")
+            self.notify("Face tracking off")
+            return
+        tracker = tracking.FaceTracker(self.args.camera, not self.args.no_mirror)
+        self.tracker, self.track_error, self.track_ready, self.spin = tracker, "", False, False
+
+        def open_it():
+            try:
+                tracker.start()
+            except tracking.TrackingError as exc:
+                self.track_error = str(exc)
+
+        self.track_start = threading.Thread(target=open_it, daemon=True)
+        self.track_start.start()
+        self.notify("Opening the camera...")
+
+    def poll_tracking(self):
+        """Report how tracking is getting on (called every frame)."""
+        tracker = self.tracker
+        if tracker is None:
+            return
+        if self.track_error or (tracker.error and not tracker.running and not self.track_start.is_alive()):
+            message = self.track_error or tracker.error
+            self.stop_live("tracker")
+            self.notify(f"Face tracking stopped: {message}")
+        elif tracker.calibrated and not self.track_ready:
+            self.track_ready = True
+            self.notify("Face tracking is on")
+        elif tracker.running and not tracker.calibrated and not self.track_ready:
+            self.message, self.message_until, self.dirty = "Look at the camera with a relaxed face...", time.time() + 4, True
+
     def stop_live(self, *names):
         """Switch off the named live inputs/outputs ("mic", "webcam"); all of them if none are named."""
-        for name in names or ("mic", "webcam"):
+        for name in names or ("mic", "webcam", "tracker"):
             item = getattr(self, name)
             if item is not None:
                 item.stop()
@@ -630,12 +670,22 @@ class App:
             heard = self.mic.shape()
             if heard.energy > 0.05 or heard.open > 0.03:
                 mouth = heard                           # silence: idle face, no gestures
+        tracked = None
+        if self.tracker is not None and self.tracker.calibrated:
+            tracked = self.tracker.state()
+            tracked = tracked if tracked.present else None
+        if tracked is not None and mouth is None:
+            mouth = speech_mod.MouthShape(open=tracked.mouth_open, wide=tracked.mouth_wide,
+                                          energy=tracked.mouth_open, beat=0.0)
         smile = raise_ = tilt = lid = 0.0
         if mouth is not None:
             talk_overlay(pose, mouth, t, r["gestures"])
             if speech is not None and tt is not None:
                 smile, raise_, tilt, lid = speech.emotion(tt)
         gaze = gaze_at(t, mouth is not None) if animate else (0.0, 0.0)
+        if tracked is not None:
+            tracking.apply_to_pose(pose, tracked)
+            gaze, smile = tracked.gaze, smile + 0.9 * tracked.smile
         mouth_args = (mouth.open, mouth.wide, mouth.press) if mouth else (0.0, 0.0, 0.0)
         if emote is not None:
             ex = emote_overlay(pose, *emote)
@@ -649,7 +699,8 @@ class App:
             pose["browL"], pose["browR"] = (0.0, 0.0, 12.0 * tilt), (0.0, 0.0, -12.0 * tilt)
         self.rig.set_mouth(*mouth_args, smile=smile)
         self.jaw = 0.105 * min(1.0, self.rig.base_open + mouth_args[0])
-        return pose, (blink_angle(t) if animate else 0.0), gaze, lid
+        blink = tracked.blink * 58.0 if tracked is not None else (blink_angle(t) if animate else 0.0)
+        return pose, blink, gaze, lid
 
     def look(self):
         """Extra draw parameters: jaw drop, hair sway and whether shadows are on."""
@@ -782,6 +833,9 @@ class App:
         if k == pygame.K_w:
             self.toggle_webcam()
             return True
+        if k == pygame.K_f:
+            self.toggle_track()
+            return True
         if k == pygame.K_t:
             self.set_tab([n for n, _ in O.TABS].index("Talk"))
             self.focus_field = "say"
@@ -869,7 +923,7 @@ class App:
         elif kind == "emote":
             self.emote = (hit[1], self.clock_time())
         elif kind == "live":
-            self.toggle_mic() if hit[1] == "mic" else self.toggle_webcam()
+            {"mic": self.toggle_mic, "webcam": self.toggle_webcam, "track": self.toggle_track}[hit[1]]()
         elif kind == "lib":
             {"save": self.save_avatar, "open": self.open_dialog, "folder": self.open_exports,
              "saveas": lambda: self.save_avatar(dialog=True), "packs": self.open_packs,
@@ -931,12 +985,13 @@ class App:
                         self.message, alpha, self.help, self.say_text, self.name_text, self.focus_field,
                         cursor, self.speech is not None, busy, self.avatars, self.history.can_undo,
                         self.history.can_redo, self.mic is not None, self.webcam is not None,
-                        round(self.webcam.measured_fps) if self.webcam else 0)
+                        round(self.webcam.measured_fps) if self.webcam else 0, self.tracker is not None)
         key = (self.tab, self.row, self.cam.view, self.spin, self.message, round(alpha, 2), self.help,
                tuple(self.state.values()), self.say_text, self.name_text, self.focus_field, cursor,
                self.speech is not None, busy, len(O.choices("voice")), len(self.avatars),
                tuple(a.modified for a in self.avatars), self.history.can_undo, self.history.can_redo,
-               self.mic is not None, self.webcam is not None, round(self.webcam.measured_fps) if self.webcam else 0)
+               self.mic is not None, self.webcam is not None, round(self.webcam.measured_fps) if self.webcam else 0,
+               self.tracker is not None)
         return model, key
 
     def present(self):
@@ -952,6 +1007,7 @@ class App:
         view = (w - RESERVED, h)
         t = self.clock_time()
         self.poll_background()
+        self.poll_tracking()
         if self.avatars_stale and O.TABS[self.tab][0] == "Library":
             self.refresh_avatars()
         self.autosave_tick()
@@ -1088,6 +1144,10 @@ def parse_args(argv=None):
     ap.add_argument("--webcam", action="store_true", help="start the virtual webcam straight away")
     ap.add_argument("--webcam-size", default="1280x720", help="virtual webcam picture size (default 1280x720)")
     ap.add_argument("--webcam-fps", type=int, default=30, help="virtual webcam frame rate (default 30)")
+    ap.add_argument("--track", action="store_true", help="follow your face with the camera")
+    ap.add_argument("--camera", type=int, default=0, help="camera number for --track (default 0)")
+    ap.add_argument("--no-mirror", action="store_true", help="--track: do not mirror (turn the way the camera sees you)")
+    ap.add_argument("--list-cameras", action="store_true", help="list cameras and exit")
     ap.add_argument("--list-mics", action="store_true", help="list microphones and exit")
     ap.add_argument("--clip", metavar="FILE", help="render the --say line to an .mp4 (or .gif) and exit")
     ap.add_argument("--out", help="folder for exports (default: your library's exports folder)")
@@ -1124,6 +1184,10 @@ def main(argv=None):
     args = parse_args(argv)
     if args.list:
         list_library()
+        return
+    if args.list_cameras:
+        found = tracking.list_cameras()
+        print("\n".join(f"{i}\tcamera {i}" for i in found) if found else "(no cameras found)")
         return
     if args.list_mics:
         mics = live.list_microphones()
