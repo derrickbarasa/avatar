@@ -7,10 +7,11 @@ import sys
 import tempfile
 import time
 
+import numpy as np
 import pygame
 
 from . import options as O
-from . import packs, recorder
+from . import live, packs, recorder
 from . import speech as speech_mod
 from . import clips, store, tts
 from .builder import build_avatar
@@ -144,6 +145,8 @@ class App:
         self.autosave_due = None
         self.emote = None
         self.hair, self.jaw, self.last_t = HairSwing(), 0.0, None
+        self.mic, self.webcam = None, None      # live.LiveVoice / live.VirtualCam while switched on
+        self.feed_cam = None                    # the virtual webcam's camera
         self.rig_cache = {}
         self.message, self.message_until = "", 0.0
         self.dirty, self.dragging = True, False
@@ -174,6 +177,11 @@ class App:
                 self.speak_now_blocking()
             else:
                 self.speak()
+        if args.shot is None:
+            if args.mic or args.mic_device is not None:
+                self.toggle_mic()
+            if args.webcam:
+                self.toggle_webcam()
 
     # ---- state ---------------------------------------------------------------------
     def setup_state(self, args):
@@ -534,6 +542,68 @@ class App:
         if self.rig:
             self.rig.set_mouth(0.0)
 
+    # ---- live: microphone and virtual webcam --------------------------------------------------
+    @property
+    def live_on(self):
+        return self.mic is not None or self.webcam is not None
+
+    def toggle_mic(self):
+        """Lip-sync from the microphone: the avatar's mouth, nods and gestures follow your voice."""
+        if self.mic is not None:
+            self.stop_live("mic")
+            self.rig.set_mouth(0.0)
+            self.notify("Microphone off")
+            return
+        voice = live.LiveVoice()
+        try:
+            voice.start(self.args.mic_device)
+        except live.LiveError as exc:
+            self.notify(str(exc))
+            return
+        self.mic, self.spin = voice, False
+        self.notify(f"Listening to {voice.device_name}")
+
+    def toggle_webcam(self):
+        """Send the avatar to a virtual camera that Zoom, Teams, Meet or OBS can pick as a webcam."""
+        if self.webcam is not None:
+            self.stop_live("webcam")
+            self.notify("Virtual webcam off")
+            return
+        cam = live.VirtualCam(self.args.webcam_size, self.args.webcam_fps)
+        try:
+            cam.start()
+        except live.LiveError as exc:
+            self.notify(str(exc))
+            return
+        self.webcam, self.spin = cam, False
+        self.feed_cam = Camera("webcam")                # its own framing; turns with the window's camera
+        self.notify(f'Virtual webcam on: choose "{cam.name}" in your meeting app')
+
+    def stop_live(self, *names):
+        """Switch off the named live inputs/outputs ("mic", "webcam"); all of them if none are named."""
+        for name in names or ("mic", "webcam"):
+            item = getattr(self, name)
+            if item is not None:
+                item.stop()
+                setattr(self, name, None)
+
+    def send_webcam(self, pose, blink, gaze, lid, bg):
+        """Render the camera's own 16:9 picture (independent of the window) and hand it over, at its frame rate."""
+        cam = self.webcam
+        if cam is None or not cam.due():
+            return
+        w, h = cam.size
+        self.feed_cam.yaw, self.feed_cam.pitch = self.cam.yaw, self.cam.pitch
+        self.feed_cam.update(self.rig.ground_y)
+        try:
+            surf = self.renderer.capture(self.rig, pose, self.feed_cam, bg, (w, h), (w, h), scale=1, supersample=1,
+                                         offscreen=True, reuse_shadows=True, blink=blink, gaze=gaze, lid=lid,
+                                         reserved=0, **self.look())
+            cam.send(np.frombuffer(pygame.image.tostring(surf, "RGB"), np.uint8).reshape(h, w, 3))
+        except Exception as exc:                       # the driver went away, the card ran out of memory...
+            self.stop_live("webcam")
+            self.notify(f"Virtual webcam stopped: {exc}")
+
     def poll_background(self):
         if self.job is not None and self.job.done:
             job, self.job = self.job, None
@@ -556,6 +626,10 @@ class App:
             mouth = speech_mod.MouthShape(open=o, wide=w, press=p)
         elif speech is not None and tt is not None:
             mouth = speech.sample(tt)
+        elif self.mic is not None:
+            heard = self.mic.shape()
+            if heard.energy > 0.05 or heard.open > 0.03:
+                mouth = heard                           # silence: idle face, no gestures
         smile = raise_ = tilt = lid = 0.0
         if mouth is not None:
             talk_overlay(pose, mouth, t, r["gestures"])
@@ -702,6 +776,12 @@ class App:
                 self.job = None
                 return True
             return False
+        if k == pygame.K_m:
+            self.toggle_mic()
+            return True
+        if k == pygame.K_w:
+            self.toggle_webcam()
+            return True
         if k == pygame.K_t:
             self.set_tab([n for n, _ in O.TABS].index("Talk"))
             self.focus_field = "say"
@@ -788,6 +868,8 @@ class App:
             self.speak()
         elif kind == "emote":
             self.emote = (hit[1], self.clock_time())
+        elif kind == "live":
+            self.toggle_mic() if hit[1] == "mic" else self.toggle_webcam()
         elif kind == "lib":
             {"save": self.save_avatar, "open": self.open_dialog, "folder": self.open_exports,
              "saveas": lambda: self.save_avatar(dialog=True), "packs": self.open_packs,
@@ -848,11 +930,13 @@ class App:
         model = UIModel(self.state, self.tab, self.row, O.encode_state(self.state), self.cam.view, self.spin,
                         self.message, alpha, self.help, self.say_text, self.name_text, self.focus_field,
                         cursor, self.speech is not None, busy, self.avatars, self.history.can_undo,
-                        self.history.can_redo)
+                        self.history.can_redo, self.mic is not None, self.webcam is not None,
+                        round(self.webcam.measured_fps) if self.webcam else 0)
         key = (self.tab, self.row, self.cam.view, self.spin, self.message, round(alpha, 2), self.help,
                tuple(self.state.values()), self.say_text, self.name_text, self.focus_field, cursor,
                self.speech is not None, busy, len(O.choices("voice")), len(self.avatars),
-               tuple(a.modified for a in self.avatars), self.history.can_undo, self.history.can_redo)
+               tuple(a.modified for a in self.avatars), self.history.can_undo, self.history.can_redo,
+               self.mic is not None, self.webcam is not None, round(self.webcam.measured_fps) if self.webcam else 0)
         return model, key
 
     def present(self):
@@ -878,13 +962,15 @@ class App:
         bg = O.resolve(self.state)["bg"]
         if self.spin:
             self.cam.yaw += 0.4
-        elif self.speech is not None and not self.dragging and self.args.shot is None:
+        elif (self.speech is not None or self.live_on) and not self.dragging and self.args.shot is None:
             self.cam.yaw += (round(self.cam.yaw / 360) * 360 - self.cam.yaw) * 0.08   # turn to face us
         self.cam.update(self.rig.ground_y)
         self.renderer.draw_scene(self.rig, pose, self.cam, bg, (w, h), blink, reserved=RESERVED, gaze=gaze,
                                  lid=lid, **self.look())
         if self.pending:
             self.process_pending(view, (w, h), pose, blink, gaze, lid, bg)
+        if self.webcam is not None:
+            self.send_webcam(pose, blink, gaze, lid, bg)
         model, key = self.ui_model()
         if key != self.ui_key or self.ui.dirty:
             self.ui.render(model, (w, h))
@@ -907,6 +993,7 @@ class App:
                 break
         self.autosave_tick(force=self.args.shot is None)
         self.stop_speech()
+        self.stop_live()
         pygame.quit()
 
     def finish_shot(self, view):
@@ -996,6 +1083,12 @@ def parse_args(argv=None):
     ap.add_argument("--export", action="append", default=[], metavar="KIND",
                     choices=["png", "transparent", "glb", "skinned", "animated", "vrm", "obj", "bundle"],
                     help="write an export and exit (repeatable): png transparent glb skinned vrm obj bundle")
+    ap.add_argument("--mic", action="store_true", help="lip-sync from the microphone")
+    ap.add_argument("--mic-device", metavar="NAME", help="microphone to use (name fragment or number); implies --mic")
+    ap.add_argument("--webcam", action="store_true", help="start the virtual webcam straight away")
+    ap.add_argument("--webcam-size", default="1280x720", help="virtual webcam picture size (default 1280x720)")
+    ap.add_argument("--webcam-fps", type=int, default=30, help="virtual webcam frame rate (default 30)")
+    ap.add_argument("--list-mics", action="store_true", help="list microphones and exit")
     ap.add_argument("--clip", metavar="FILE", help="render the --say line to an .mp4 (or .gif) and exit")
     ap.add_argument("--out", help="folder for exports (default: your library's exports folder)")
     ap.add_argument("--fresh", action="store_true", help="don't reopen the autosaved avatar")
@@ -1010,6 +1103,16 @@ def parse_args(argv=None):
     except ValueError:
         ap.error("--size must look like 1000x720")
     args.size = (max(w, MIN_SIZE[0]), max(h, MIN_SIZE[1]))
+    try:
+        cw, ch = (int(x) for x in args.webcam_size.lower().split("x"))
+        if not (160 <= cw <= 3840 and 120 <= ch <= 2160):
+            raise ValueError
+    except ValueError:
+        ap.error("--webcam-size must look like 1280x720 (between 160x120 and 3840x2160)")
+    args.webcam_size = (even(cw), even(ch))
+    args.webcam_fps = min(60, max(5, args.webcam_fps))
+    if args.mic_device is not None and args.mic_device.isdigit():
+        args.mic_device = int(args.mic_device)
     if (args.export or args.clip or args.save) and args.shot is None:
         args.shot = ""                       # exports are non-interactive: render, write, exit
     return args
@@ -1021,6 +1124,11 @@ def main(argv=None):
     args = parse_args(argv)
     if args.list:
         list_library()
+        return
+    if args.list_mics:
+        mics = live.list_microphones()
+        print("\n".join(f"{i}\t{name}" for i, name in mics) if mics
+              else "(no microphones found; pip install sounddevice)")
         return
     try:
         if args.sheet:

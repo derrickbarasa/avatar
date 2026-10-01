@@ -361,6 +361,8 @@ class Camera:
             return -0.02, 3.3
         if view == "bust":
             return -0.8, 6.5
+        if view == "webcam":           # head and shoulders in a wide frame (the virtual webcam; not in the V cycle)
+            return -0.5, 1.65 / math.tan(math.radians(FOV / 2))
         if view == "hands":            # for checking hand shapes (not in the V cycle)
             return -3.9, 4.6
         span = (1.45 - ground_y) * 1.08
@@ -466,13 +468,16 @@ class Renderer:
 
     # ---- scene ---------------------------------------------------------------
     def draw_scene(self, rig, pose, cam, bg, size, blink=0.0, transparent=False, reserved=0,
-                   gaze=(0.0, 0.0), lid=0.0, jaw=0.0, swing=(0.0, 0.0, 0.0), shadows=True, quality=1.0):
+                   gaze=(0.0, 0.0), lid=0.0, jaw=0.0, swing=(0.0, 0.0, 0.0), shadows=True, quality=1.0,
+                   reuse_shadows=False):
         """Draw into the whole window; `reserved` px on the right (the UI card) are kept free by
         shifting the lens, so the avatar stays centred in the remaining area.
 
         gaze (pitch, yaw) turns the eyes; lid closes the lids extra (expressions); jaw is how far the
         lower face drops (talking); swing is the hair sway; shadows toggles the cast shadows;
         quality 1.0 / 0.6 / 0.3 (High / Balanced / Fast) thins the hair and, below 1, drops ambient occlusion.
+        reuse_shadows skips the shadow pass and uses the maps of the previous call (same rig, pose and
+        camera direction: a second picture of the frame that was just drawn).
         """
         self.quality = quality
         w, h = size
@@ -484,7 +489,7 @@ class Renderer:
         view = cam.matrix()
         self.inv_view = np.linalg.inv(view)
         use_shadow = bool(shadows and self.shadow.ok)
-        if use_shadow:
+        if use_shadow and not reuse_shadows:
             self._shadow_pass(rig, pose, view, cam)
         glViewport(0, 0, w, h)
         glClearColor(0, 0, 0, 0)
@@ -774,9 +779,10 @@ class Renderer:
             glDeleteRenderbuffers(2, [color, depth])
             self.offscreen = None
 
-    def capture(self, rig, pose, cam, bg, size, view, scale=2, supersample=3, alpha=False, **kw):
+    def capture(self, rig, pose, cam, bg, size, view, scale=2, supersample=3, alpha=False, offscreen=False, **kw):
         """Draw the scene `supersample` times larger off-screen and shrink it to `scale` x the view size:
         much smoother edges and hair than the live window. Returns a pygame surface.
+        `offscreen` draws off-screen even at 1x (a picture of any size, not just the window's).
         Falls back to the plain on-screen picture if the graphics card can't do it."""
         w, h = size
         vw, vh = view
@@ -788,7 +794,7 @@ class Renderer:
         big = max(ss, scale)
         while big > 1 and max(w, h) * big > limit:
             big -= 1
-        fbo = self._offscreen(w * big, h * big) if big > 1 or scale > 1 else None
+        fbo = self._offscreen(w * big, h * big) if big > 1 or scale > 1 or offscreen else None
         if not fbo:
             self.release_offscreen()
             return self.grab(view, alpha=alpha)

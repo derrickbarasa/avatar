@@ -25,6 +25,8 @@ feature from a tabbed side panel, strike a pose, and export the result.
   pressed, teeth and tongue) timed to the audio, and while it talks it nods on
   stressed syllables, raises its brows, gestures with its hands, holds eye
   contact and turns to face you.
+- **Live:** the avatar can follow your microphone (mouth, nods and gestures) and appear as a
+  virtual webcam in Zoom, Teams, Meet or OBS.
 - **Presets and sharing:** eight outfit presets, and a short share code that
   captures a whole avatar.
 
@@ -75,6 +77,7 @@ Everything you make lives in one folder, `~/Documents/AvatarStudio` (override wi
 | S / G | save PNG / transparent PNG |
 | E / O / B | export GLB / OBJ + MTL / full bundle (zip) |
 | C / Ctrl+V | copy share code / load from the clipboard |
+| M / W | microphone lip-sync / virtual webcam on or off |
 | P | pick a photo and set skin tone, hair colour and length, facial hair |
 | K / L | save / load `avatar.json` |
 
@@ -97,6 +100,26 @@ python avatar.py --say "Hello, I can talk now."              # start speaking st
 python avatar.py --shot mouth.png --say "Hello there" --time 0.4   # the lips 0.4 s into the line
 python avatar.py --shot ooh.png --view face --viseme OO      # hold one mouth shape
 ```
+
+## Live: microphone and virtual webcam
+
+Both are switched on in the **Talk** tab (Live section), with **M** / **W**, or from the command line
+(`--mic`, `--webcam`). They need two optional packages, `pip install sounddevice pyvirtualcam`.
+
+- **Microphone:** the mouth follows what you say, with no text needed. Loudness sets how far it opens,
+  the vowel (the sound's two main frequency peaks) picks "ah", "oo" or "ee" shapes, and hissy sounds give
+  a thin spread mouth. The level adapts to your microphone and room. The head nods and the hands gesture
+  while you speak, and it idles when you stop. `--mic-device NAME` (or a number) chooses the input;
+  `--list-mics` shows them.
+- **Virtual webcam:** sends a 16:9 head-and-shoulders picture (`--webcam-size`, default 1280x720,
+  `--webcam-fps`, default 30) to a virtual camera. On Windows and macOS install OBS Studio and start its
+  Virtual Camera once, then pick "OBS Virtual Camera" in your meeting app. On Linux load `v4l2loopback`.
+  Keep the Avatar Studio window open (not minimised) while the camera is in use.
+  The Live chip shows the frame rate it is really achieving. The scene is drawn a second time for the
+  camera, so on a slower graphics card choose **Fast** quality in the Scene tab or a smaller size
+  (`--webcam-size 640x360`) to get a smoother picture.
+
+Use both together to be the avatar on a call: your voice drives the mouth.
 
 ## Talking
 
@@ -159,8 +182,8 @@ packs are reported at startup and never stop the good ones loading.
 
 ## Not done yet
 
-Neural/offline TTS, microphone input, BVH import, VRM look-at, landmark-based
-photo matching, a virtual webcam, and true screen-space ambient occlusion (the current one is a
+Neural/offline TTS, BVH import, VRM look-at, landmark-based
+photo matching, head tracking from a real webcam, and true screen-space ambient occlusion (the current one is a
 soft overhead shadow). Automated tests run on Windows, macOS and Linux CI, but the interactive
 window has only been used on Windows.
 
@@ -193,5 +216,6 @@ avatarkit/
   recorder.py        MP4 / GIF clip recording
   photo.py           photo -> option suggestions
   speech.py tts.py   text -> mouth shapes and lip-sync timeline; system text-to-speech
+  live.py            microphone lip-sync and the virtual webcam
 tests/               python -m unittest discover -s tests
 ```

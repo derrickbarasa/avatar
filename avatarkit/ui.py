@@ -33,6 +33,7 @@ SHORTCUTS = [
     ("S / G", "save PNG / transparent PNG"), ("E / O", "export GLB / OBJ"),
     ("C / Ctrl+V", "copy / paste share code"), ("P", "import from a photo"),
     ("T / Enter", "open Talk / speak the text"), ("Esc", "stop speaking"), ("F11", "full screen on / off"),
+    ("M / W", "microphone lip-sync / virtual webcam"),
     ("Drop a file", "open an .avatar file or a photo"), ("H", "show or hide this sheet"),
 ]
 
@@ -45,7 +46,8 @@ PHRASES = [
     ("Goodbye", "It was great talking to you. See you next time!"),
 ]
 LABELS = {"__say": "SAY SOMETHING", "__phrases": "QUICK PHRASES", "__name": "AVATAR NAME",
-          "__mine": "MY AVATARS", "__export": "EXPORT / DOWNLOAD", "__edit": "EDIT", "__emotes": "EMOTES"}
+          "__mine": "MY AVATARS", "__export": "EXPORT / DOWNLOAD", "__edit": "EDIT", "__emotes": "EMOTES",
+          "__live": "LIVE"}
 EXPORTS = [("png", "PNG"), ("transparent", "Transparent PNG"), ("glb", "GLB"), ("skinned", "Skinned GLB"),
            ("animated", "Animated GLB"), ("vrm", "VRM"), ("obj", "OBJ"), ("bundle", "Bundle .zip"), ("clip", "Talking clip")]
 
@@ -70,6 +72,9 @@ class UIModel:
     avatars: list = field(default_factory=list)      # store.AvatarInfo, newest first
     can_undo: bool = False
     can_redo: bool = False
+    mic_on: bool = False          # lip-sync from the microphone
+    webcam_on: bool = False       # sending to the virtual webcam
+    webcam_fps: int = 0           # how many frames per second it is really delivering
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +299,12 @@ class UI:
         y = self._chips(items, y + 26, width, [(("phrase", i), name, "chip") for i, (name, _) in enumerate(PHRASES)])
         items.append(("label", pygame.Rect(0, y + 8, width, 20), "__emotes"))
         y = self._chips(items, y + 34, width, [(("emote", key), name, "chip") for name, key, _ in EMOTES])
+        items.append(("label", pygame.Rect(0, y + 8, width, 20), "__live"))
+        y = self._chips(items, y + 34, width, [
+            (("live", "mic"), "Microphone  " + ("on" if m.mic_on else "off"), "primary" if m.mic_on else "chip"),
+            (("live", "webcam"), "Virtual webcam  " + (f"on, {m.webcam_fps} fps" if m.webcam_on and m.webcam_fps else
+                                                       "on" if m.webcam_on else "off"),
+             "primary" if m.webcam_on else "chip")])
         return items, y + 14
 
     def layout_library(self, width, m):
@@ -532,13 +543,13 @@ class UI:
             veil = pygame.Surface((W - RESERVED, H), pygame.SRCALPHA)
             veil.fill((10, 11, 16, 150))
             surf.blit(veil, (0, 0))
-            cw, chh = 440, 64 + len(SHORTCUTS) * 27
+            cw, chh = 440, 64 + len(SHORTCUTS) * 25
             card = pygame.Rect(vcx - cw // 2, max(12, (H - chh) // 2), cw, chh)
             surf.blit(shadow(cw, chh, 18), (card.x - 26, card.y - 20))
             surf.blit(pill(cw, chh, 18, COL["panel"]), card)
             surf.blit(text("Keyboard shortcuts", True, 18, COL["text"]), (card.x + 24, card.y + 18))
             for i, (k, desc) in enumerate(SHORTCUTS):
-                y = card.y + 56 + i * 27
+                y = card.y + 56 + i * 25
                 surf.blit(pill(text_width(k, True, 12) + 16, 22, 7, COL["chip"]), (card.x + 24, y))
                 surf.blit(text(k, True, 12, COL["text"]), (card.x + 32, y + 3))
                 surf.blit(text(desc, False, 13, COL["muted"]), (card.x + 200, y + 2))

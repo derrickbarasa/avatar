@@ -11,7 +11,7 @@ requires-python = ">=3.10"
 dependencies = ["pygame>=2.5", "PyOpenGL>=3.1", "numpy>=1.24"]
 
 [project.optional-dependencies]
-extras = ["opencv-python-headless<5", "imageio-ffmpeg"]
+extras = ["opencv-python-headless<5", "imageio-ffmpeg", "sounddevice", "pyvirtualcam"]
 
 [project.scripts]
 avatar-studio = "avatarkit.app:main"

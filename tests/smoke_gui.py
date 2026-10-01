@@ -171,4 +171,43 @@ while not a.speaking and time.time() - t0 < 20:
 assert a.speaking
 key(pygame.K_ESCAPE)
 assert not a.speaking
+
+# -- virtual webcam and microphone (stand-in driver and voice) -------------------------------------------------
+import types  # noqa: E402
+
+import numpy as np  # noqa: E402
+
+from avatarkit import live  # noqa: E402
+
+
+class StubCamera:
+    sent = []
+
+    def __init__(self, w, h, fps, fmt=None, device=None):
+        self.device = "Stub camera"
+
+    def send(self, picture):
+        StubCamera.sent.append(picture.shape)
+
+    def close(self):
+        pass
+
+
+sys.modules["pyvirtualcam"] = types.SimpleNamespace(Camera=StubCamera, PixelFormat=types.SimpleNamespace(RGB="rgb"))
+a.args.webcam_size = (320, 180)
+click(("live", "webcam"))
+assert a.webcam is not None, a.message
+t0 = time.time()
+while len(StubCamera.sent) < 3 and time.time() - t0 < 20:
+    frame()
+assert StubCamera.sent and set(StubCamera.sent) == {(180, 320, 3)}, StubCamera.sent[:2]
+a.mic = live.LiveVoice()                               # a voice saying "ah", fed in like the microphone would
+for i in range(40):
+    t = i * 0.02 + np.arange(320) / 16000
+    a.mic.feed(0.3 * sum(np.sin(2 * np.pi * 120 * k * t) * np.exp(-((120 * k - 800) / 200) ** 2) for k in range(1, 30)), 16000)
+frame()
+assert a.mic.shape().open > 0.3 and a.jaw > 0.03, (a.mic.shape(), a.jaw)
+click(("live", "webcam"))
+assert a.webcam is None
+a.stop_live()
 print("smoke_gui ok")

@@ -4,5 +4,8 @@ opencv-python-headless<5
 trimesh
 # optional: real-portrait test for the photo import
 scikit-image
+# optional: lip-sync from the microphone, and the avatar as a virtual webcam
+sounddevice
+pyvirtualcam
 # optional: MP4 clips with audio when ffmpeg is not installed
 imageio-ffmpeg
