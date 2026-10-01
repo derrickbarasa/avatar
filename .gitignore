@@ -5,3 +5,4 @@ avatar.json
 build/
 dist/
 *.spec
+*.egg-info/
