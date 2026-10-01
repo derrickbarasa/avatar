@@ -135,11 +135,15 @@ class StrandTests(unittest.TestCase):
             self.assertEqual(self.strand_meshes(hair), [])
 
     def test_strands_stay_out_of_the_head(self):
-        from avatarkit.strands import HEAD_C, HEAD_R
-        for hair in ("Long", "Bob", "Short", "Ponytail"):
+        from avatarkit.head import cached_head
+        head = cached_head((0.9, 0.7, 0.6), 0.28, 1.0)           # the default avatar's head
+        rng = np.random.default_rng(0)
+        for hair in ("Long", "Bob", "Short", "Ponytail", "Curly"):
             v = self.strand_meshes(hair)[0].v.astype(float)
-            e = (((v - HEAD_C) / (HEAD_R * 0.92)) ** 2).sum(1)
-            self.assertLess((e < 1.0).mean(), 0.02, hair)     # <2% of vertices dip inside
+            v = v[rng.choice(len(v), 3000, replace=False)]
+            near = ((v[:, None, :] - head.P[None]) ** 2).sum(2).argmin(1)
+            depth = ((v - head.P[near]) * head.mesh.n[near]).sum(1)     # < 0: under the skin
+            self.assertLess((depth < -0.03).mean(), 0.01, hair)
 
     def test_long_hair_reaches_the_shoulders_and_bob_stops_higher(self):
         low = lambda hair: self.strand_meshes(hair)[0].v[:, 1].min()
@@ -591,6 +595,77 @@ class ClipTests(unittest.TestCase):
                 q = np.frombuffer(bytes(buf.data[view["byteOffset"]:view["byteOffset"] + view["byteLength"]]),
                                   np.float32).reshape(-1, 4)
                 self.assertTrue(np.all(np.einsum("ij,ij->i", q[1:], q[:-1]) >= 0))
+
+
+class RealismTests(unittest.TestCase):
+    """The body is shaped like a person, not built from balls and tubes."""
+
+    def test_the_head_is_not_a_sphere(self):
+        from avatarkit.head import cached_head
+        head = cached_head((0.9, 0.7, 0.6), 0.28, 1.0)
+        width = lambda y: np.ptp(head.X[np.abs(head.Y - y) < 0.03])
+        self.assertLess(width(-0.50), 0.8 * width(0.05))          # the jaw is narrower than the cranium
+        depth = lambda y: head.Z[np.abs(head.Y - y) < 0.03].max() - head.Z[np.abs(head.Y - y) < 0.03].min()
+        self.assertLess(depth(-0.55), 0.7 * depth(0.1))           # ... and the chin is shallower than the skull
+        back = head.Z[np.abs(head.Y - 0.2) < 0.03].min()
+        front = head.Z[(np.abs(head.Y - 0.35) < 0.03) & (np.abs(head.X) < 0.05)].max()
+        self.assertLess(back, -front)                              # the skull reaches further back than the brow
+
+    def test_limb_sections_are_ellipses_that_can_be_offset(self):
+        from avatarkit.mesh import limb
+        line = np.array([[0.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, -2.0, 0.0]])
+        m = limb(line, np.full(3, 0.1), np.full(3, 0.3), (1, 1, 1), off=np.full(3, 0.05), sides=24)
+        self.assertAlmostEqual(float(np.ptp(m.v[:, 0])), 0.2, places=2)           # side to side
+        self.assertAlmostEqual(float(np.ptp(m.v[:, 2])), 0.6, places=2)           # front to back
+        self.assertAlmostEqual(float((m.v[:, 2].max() + m.v[:, 2].min()) / 2), 0.05, places=2)
+
+    def test_arms_and_legs_vary_along_their_length(self):
+        rig = default_rig(top="Tank top", pants="Shorts")
+        for name in ("armL", "foreL", "thighL", "shinL"):
+            mesh = rig[name].meshes[0]
+            ys = np.unique(np.round(mesh.v[:, 1], 3))
+            widths = np.array([np.ptp(mesh.v[np.isclose(mesh.v[:, 1], y, atol=1e-3), 0]) for y in ys])
+            self.assertGreater(widths.max(), 1.3 * widths[widths > 0].min(), name)      # taper and muscle, not a tube
+
+    def test_calf_bulges_backwards_and_forearm_flattens_toward_the_wrist(self):
+        rig = default_rig(top="Tank top", pants="Shorts")
+        calf = rig["shinL"].meshes[0].v
+        centre = (calf[:, 2].max() + calf[:, 2].min()) / 2
+        self.assertLess(calf[calf[:, 1] > calf[:, 1].min() + 0.5][:, 2].min(), centre)
+        fore = rig["foreL"].meshes[0].v
+        low = fore[fore[:, 1] < fore[:, 1].min() + 0.15]
+        self.assertGreater(np.ptp(low[:, 2]), 1.15 * np.ptp(low[:, 0]))          # wider front to back than across
+
+    def test_feet_join_the_ankle_and_stand_on_the_ground(self):
+        for shoes in ("Barefoot", "Sneakers", "Boots"):
+            rig = default_rig(shoestyle=shoes)
+            foot = rig["footL"]
+            top = max(m.v[:, 1].max() for m in foot.meshes)
+            bottom = min(m.v[:, 1].min() for m in foot.meshes)
+            self.assertGreater(top, foot.pivot[1] - 0.05, shoes)       # reaches up to the ankle: no gap under the shin
+            self.assertAlmostEqual(bottom, rig.ground_y, delta=0.1, msg=shoes)
+
+    def test_beard_covers_sideburns_and_chin_but_not_the_lips(self):
+        from avatarkit.head import MOUTH_Y
+        rig = default_rig(facial="Beard")
+        beard = [m for m in rig["head"].meshes if m.strand and m.part == "facial"][0]
+        roots = beard.v.reshape(beard.n_strands, -1, 3)[:, 0].astype(float)
+        self.assertGreater(((np.abs(roots[:, 0]) > 0.38) & (roots[:, 1] > -0.25)).sum(), 100)    # sideburns
+        self.assertGreater((roots[:, 1] < -0.52).sum(), 300)                                        # chin and jaw
+        on_lips = ((roots[:, 0] / 0.17) ** 2 + ((roots[:, 1] - MOUTH_Y) / 0.05) ** 2 < 1) & (roots[:, 2] > 0.3)
+        self.assertLess((on_lips & (roots[:, 1] < MOUTH_Y - 0.01)).sum(), 20)    # (the moustache sits above the lips)
+        self.assertLess(roots[:, 1].max(), 0.1)                     # nothing grows up the forehead
+
+    def test_hair_under_a_hat_is_only_what_hangs_below_its_edge(self):
+        bare = default_rig(hair="Short")["head"].meshes
+        hatted = default_rig(hair="Short", hat="Cap")["head"].meshes
+        crown = lambda meshes: max(m.v.reshape(m.n_strands, -1, 3)[:, 0, 1].max() for m in meshes
+                                   if m.strand and m.part == "hair")
+        self.assertGreater(crown(bare), 0.5)
+        for m in hatted:
+            if m.strand and m.part == "hair":
+                roots = m.v.reshape(m.n_strands, -1, 3)[:, 0]
+                self.assertLess(roots[:, 1].max(), 0.3)            # no roots up on the covered crown
 
 
 if __name__ == "__main__":

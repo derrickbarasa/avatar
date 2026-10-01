@@ -61,7 +61,7 @@ def build_avatar(v):
         hat = "none"
     elif hat != "none" and style in ("quiff", "bun", "mohawk", "curly"):
         style = "short"  # keep tall styles from poking through the hat
-    parts = list(_hair(head, style, hair)) + list(_hat(head, hat, tuple(v["hatcolor"])))
+    parts = list(_hair(head, style, hair, hat)) + list(_hat(head, hat, tuple(v["hatcolor"])))
     node.add([m.outlined() for m in parts])
     node.add(_facial(head, v["facial"], hair))
     if v["glasses"] != "none":

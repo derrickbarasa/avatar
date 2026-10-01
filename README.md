@@ -4,16 +4,19 @@ A stylised 3D avatar creator. The character is generated in code from smooth
 meshes and drawn with a cel-shading shader and inked outlines. Pick every
 feature from a tabbed side panel, strike a pose, and export the result.
 
-- **Face:** sculpted head (nose, cheekbones, jaw), eyes with a procedural iris,
+- **Face:** a skull with a flat-sided cranium, sloping forehead, jaw line and chin (not a ball), with nose, cheekbones, eyes with a procedural iris,
   eyelids and lashes that blink, ears, nostrils, lips with teeth and tongue, six
   expressions, freckles, glasses, earrings.
 - **Hair:** twelve styles built from thousands of real strands (grown from the
   scalp, clumped into locks, pushed out of the head and shoulders, with
   anisotropic highlights): short, curly, long, bob, bangs, bun, ponytail, quiff,
-  mohawk, afro. Beards, moustaches and eyebrows are strands too, hugging the
-  skin. Plus hats.
+  mohawk, afro. Beards (sideburns, cheeks, chin and under the jaw, thinning toward
+  the cheek line, clear of the lips), moustaches and eyebrows are strands too, hugging the skin.
+  Plus hats: the hair under a hat is only what hangs below its edge.
 - **Body:** three body types, build, height, shoulder and hip width, head size and neck
-  length, muscle-shaped arms and legs, hands with fingers.
+  length. Arms and legs have elliptical, tapering sections (deltoid, biceps, elbow, forearm flattening
+  to the wrist, thigh, knee, calf bulging backwards, ankle) with a slight bend, large hands with
+  fingers, and shaped feet that join the ankle.
 - **Outfit:** tee, polo, long sleeve, sweater, tank, hoodie, jacket, dress; jeans, shorts, skirt;
   sneakers, boots or barefoot; stripes, dots, plaid or a chest emblem.
 - **Extras:** necklace, scarf, watch, backpack.

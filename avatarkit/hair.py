@@ -3,10 +3,10 @@ import math
 
 import numpy as np
 
-from .head import MOUTH_Y
+from .head import MOUTH_Y, skull_ring
 from .mathutil import catmull, mix, rot_x, smoothstep
 from .mesh import Mesh, ellipsoid, grid_faces, loft, tube, unit_sphere_z
-from .strands import facial_strand_meshes, mustache_margin, strand_meshes
+from .strands import beard_margin, facial_strand_meshes, mustache_margin, strand_meshes
 
 HAIR = dict(shine=40, spec=0.25, kind="hair")
 
@@ -22,18 +22,33 @@ HAIRLINES["bob"] = HAIRLINES["long"]
 AZIMUTHS = np.radians([0, 40, 80, 110, 150, 180])
 
 
-def hair_meshes(head, style, color):
-    """Strands grown over a darker under-layer (scalp, hair mass) that hides any gaps."""
+HAT_ANGLES = np.radians([0, 60, 110, 180])
+HAT_LINES = {  # where a hat's lower edge sits at azimuth 0, 60, 110, 180 degrees from the front
+    "beanie": [0.27, 0.20, -0.10, -0.18],
+    "cap": [0.28, 0.26, 0.16, 0.10],
+    "bucket": [0.13] * 4,
+    "tophat": [0.20] * 4,
+}
+
+
+def hair_meshes(head, style, color, hat="none"):
+    """Strands grown over a darker under-layer (scalp, hair mass) that hides any gaps.
+
+    Under a hat there is no hair on the covered scalp: only what grows below the hat's edge is drawn."""
     if style == "bald":
         return []
     theta = np.abs(np.arctan2(head.X, head.Z))
     margin = head.Y - np.interp(theta, AZIMUTHS, HAIRLINES[style])
+    if hat in HAT_LINES:
+        margin = np.minimum(margin, np.interp(theta, HAT_ANGLES, HAT_LINES[hat]) - 0.03 - head.Y)
+        if (margin > 0.03).sum() < 40:             # nothing left between the hairline and the hat
+            return []
     strands = strand_meshes(head, style, color, margin)
     under = mix(color, (0, 0, 0), 0.38) if strands else color
-    return _under_layer(head, style, under, margin) + strands
+    return _under_layer(head, style, under, margin, hat != "none") + strands
 
 
-def _under_layer(head, style, color, margin):
+def _under_layer(head, style, color, margin, hatted=False):
     if style == "afro":
         return [afro_mesh(color)]
     top = np.clip(head.Y, 0, 1)
@@ -48,9 +63,9 @@ def _under_layer(head, style, color, margin):
     out = [head.shell(margin, thick, color, 0.05, **HAIR)]
     if style == "bun":
         out.append(ellipsoid((0, 0.70, -0.22), (0.21, 0.21, 0.21), color, **HAIR))
-    elif style == "long":
+    elif style == "long" and not hatted:          # (under a hat the strands that hid this slab are gone)
         out.append(hair_curtain(color, 1.35))
-    elif style in ("bob", "bangs"):
+    elif style in ("bob", "bangs") and not hatted:
         out.append(hair_curtain(color, 0.7))
     elif style == "pigtails":
         for s in (-1, 1):
@@ -81,17 +96,16 @@ def hat_meshes(head, kind, color):
     if kind == "none":
         return []
     theta = np.abs(np.arctan2(head.X, head.Z))
-    keys = np.radians([0, 60, 110, 180])
+    keys = HAT_ANGLES
     top = np.clip(head.Y, 0, 1)
     fabric = dict(shine=8, spec=0.03, kind="cloth")
     if kind == "beanie":
-        levels = [0.27, 0.20, -0.10, -0.18]
+        levels = HAT_LINES["beanie"]
         out = [head.shell(head.Y - np.interp(theta, keys, levels), 0.07 + 0.02 * top,
                           color, 0.03, **fabric)]
         phi = np.linspace(math.pi, 3 * math.pi, 40)  # start at the back so the seam is hidden
         y = np.interp(np.abs((phi + math.pi) % (2 * math.pi) - math.pi), keys, levels) + 0.005
-        half = np.sqrt(np.clip(1 - (y / 0.62) ** 2, 0, 1))
-        cuff = np.stack([(0.5 * half + 0.09) * np.sin(phi), y, (0.56 * half + 0.09) * np.cos(phi)], -1)
+        cuff = skull_ring(phi, y, 0.09)
         out.append(tube(cuff, np.full(len(phi), 0.05), mix(color, (0, 0, 0), 0.15), sides=10,
                         cap_ends=False, **fabric))
         return out
@@ -109,7 +123,7 @@ def hat_meshes(head, kind, color):
                     np.array([0.68, 1.02]), color, **fabric),
                _hat_band(0.30, 0.13, mix(color, (1, 1, 1), 0.5), fabric, radius=0.10)]
         return out
-    levels = [0.28, 0.26, 0.16, 0.10]
+    levels = HAT_LINES["cap"]
     return [head.shell(head.Y - np.interp(theta, keys, levels), 0.06 + 0.03 * top, color, 0.03, **fabric),
             ellipsoid((0, 0.27, 0.60), (0.29, 0.022, 0.30), color, rot=rot_x(math.radians(14)),
                       detail=28, **fabric),
@@ -119,9 +133,7 @@ def hat_meshes(head, kind, color):
 def _hat_band(y, thick, color, material, radius=0.0):
     """A ribbon around the hat just above the brim."""
     phi = np.linspace(math.pi, 3 * math.pi, 40)
-    half = math.sqrt(max(0.0, 1 - (min(y, 0.6) / 0.62) ** 2))
-    rx, rz = (0.5 * half + 0.08 + radius), (0.56 * half + 0.08 + radius)
-    ring = np.stack([rx * np.sin(phi), np.full(len(phi), y), rz * np.cos(phi)], -1)
+    ring = skull_ring(phi, min(y, 0.6), 0.08 + radius)
     return tube(ring, np.full(len(phi), thick * 0.4), color, sides=10, cap_ends=False, **material)
 
 
@@ -172,11 +184,8 @@ def facial_hair_meshes(head, style, color):
     margin = np.full(head.Y.shape, -1.0)
     out = []
     if beard:
-        theta = np.abs(np.arctan2(head.X, head.Z))
-        jaw = np.minimum(-0.22 - head.Y, (np.radians(85) - theta) * 0.5)
-        mouth = np.sqrt((head.X / 0.19) ** 2 + ((head.Y - MOUTH_Y) / 0.065) ** 2) - 1
-        margin = np.where(head.Y > -0.22, -1.0, np.minimum(jaw, mouth * 0.15))
-        out.append(head.shell(margin * 0.35, 0.03, dark, 0.03, **HAIR))   # soft top edge
+        margin = beard_margin(head)
+        out.append(head.shell(margin * 0.30, 0.02, dark, 0.03, opacity=0.35, **HAIR))   # a shadow of stubble under the beard
     out.append(head.shell(mustache_margin(head), 0.010, dark, 0.3, **HAIR))
     out += facial_strand_meshes(head, margin, color, beard)
     for m in out:

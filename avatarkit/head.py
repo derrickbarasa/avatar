@@ -13,20 +13,56 @@ DARK = (0.10, 0.07, 0.07)
 GOLD = (0.95, 0.78, 0.30)
 
 
+HEAD_Y, HEAD_H = 0.02, 0.66          # the skull spans y = HEAD_Y +- HEAD_H (crown to chin)
+SKULL_POWER = 2.5                     # cross-section exponent: 2 is an ellipse, higher is squarer (flatter sides)
+# How each part of the skull departs from a plain ellipsoid, by height t (-1 chin .. +1 crown):
+# t, width, front depth, back depth (multipliers of the ellipsoid's radii 0.50, 0.56, 0.56)
+_SKULL_KEYS = np.array([
+    (-1.00, 0.78, 1.20, 0.40),
+    (-0.90, 0.90, 1.28, 0.50),     # chin: a firm, slightly forward jaw tip; the nape tucks in
+    (-0.75, 0.97, 1.24, 0.68),
+    (-0.55, 1.01, 1.14, 0.84),     # jaw line
+    (-0.30, 1.00, 1.07, 0.98),
+    (0.00, 1.00, 1.00, 1.03),      # ears / temples: the widest part
+    (0.35, 0.99, 0.95, 1.04),
+    (0.70, 0.93, 0.92, 1.00),      # forehead slopes back, the cranium stays full behind
+    (1.00, 0.90, 0.90, 0.95)])
+
+
+def skull_radii(y, jaw=0.0):
+    """Half-width, front depth and back depth of the skull at height y (arrays), for a jaw value."""
+    t = np.clip((np.asarray(y, float) - HEAD_Y) / HEAD_H, -1.0, 1.0)
+    mod = np.stack([np.interp(t, _SKULL_KEYS[:, 0], _SKULL_KEYS[:, c]) for c in (1, 2, 3)], -1)
+    round_off = np.sqrt(np.clip(1.0 - t * t, 0.0, 1.0))[..., None]
+    low = np.clip(-t, 0, 1)[..., None] ** 1.6
+    mod = mod * np.concatenate([1 - jaw * low, 1 - 0.5 * jaw * low, np.ones_like(low)], -1)
+    return mod * round_off * np.array([0.50, 0.56, 0.56])
+
+
+def skull_ring(phi, y, extra=0.0):
+    """Points on the skull's horizontal section at height y (angle phi, 0 = straight ahead), pushed out by `extra`."""
+    w, front, back = (a[..., 0] for a in np.split(skull_radii(y), 3, axis=-1))
+    sx, cz = np.sin(phi), np.cos(phi)
+    e = 2.0 / SKULL_POWER
+    return np.stack([(w + extra) * np.sign(sx) * np.abs(sx) ** e, np.broadcast_to(np.asarray(y, float), sx.shape),
+                     (np.where(cz > 0, front, back) + extra) * np.sign(cz) * np.abs(cz) ** e], -1)
+
+
 class Head:
-    """Sculpted head: an ellipsoid with a tapered jaw and gaussian features."""
+    """Sculpted head: a skull built from cross-sections (flat-sided cranium, jaw, chin) plus gaussian features."""
     NU, NV = 128, 96
 
     def __init__(self, skin, jaw, nose):
         skin = np.asarray(skin, float)
         lat = np.linspace(-math.pi / 2, math.pi / 2, self.NV)[:, None]
         lon = np.linspace(0, 2 * math.pi, self.NU, endpoint=False)[None, :]
-        dx = np.cos(lat) * np.sin(lon)
-        dy = np.sin(lat) * np.ones_like(lon)
-        dz = np.cos(lat) * np.cos(lon)
-        x, y, z = 0.50 * dx, 0.62 * dy, 0.56 * dz
-        low = np.clip(-dy, 0, 1) ** 1.6
-        x, z = x * (1 - jaw * low), z * (1 - 0.5 * jaw * low)
+        dz = np.cos(lat) * np.cos(lon)                              # for masks: how far round the front we are
+        y = (HEAD_Y + HEAD_H * np.sin(lat)) * np.ones_like(lon)
+        w, front, back = (a[..., 0] for a in np.split(skull_radii(y, jaw), 3, axis=-1))
+        sx, cz = np.sin(lon) * np.ones_like(y), np.cos(lon) * np.ones_like(y)
+        e = 2.0 / SKULL_POWER
+        x = w * np.sign(sx) * np.abs(sx) ** e
+        z = np.where(cz > 0, front, back) * np.sign(cz) * np.abs(cz) ** e
 
         def g(cx, cy, sx, sy):
             return gauss(x, y, cx, cy, sx, sy)
@@ -79,7 +115,7 @@ class Head:
             out[a:a + 400] = (fz[idx] * w).sum(1) / w.sum(1)
         return out
 
-    def shell(self, margin, thickness, color, edge=0.05, **kw):
+    def shell(self, margin, thickness, color, edge=0.05, opacity=1.0, **kw):
         """Offset copy of the head where margin > 0.
 
         The border fades out (alpha) and sinks into the scalp, so the edge
@@ -89,7 +125,7 @@ class Head:
         t = np.broadcast_to(thickness, margin.shape).ravel() * smoothstep(0, edge, m) + 0.007
         verts = self.P + self.mesh.n * t[:, None]
         faces = self.faces[(m > 0)[self.faces].any(1)]
-        alpha = smoothstep(0, 0.035, m)
+        alpha = smoothstep(0, 0.035, m) * opacity
         colors = np.column_stack([np.tile(color, (len(m), 1)), alpha])
         return Mesh(verts, faces, color, ref=(0, 0, 0), per_face=False, colors=colors, **kw)
 
@@ -251,9 +287,9 @@ def lip_meshes(head, smile, width, skin, open_=0.0):
 def ear_meshes(side, skin):
     rot = rot_y(-side * 0.35)
     inner = tuple(c * 0.72 for c in skin)
-    return [ellipsoid((side * 0.485, -0.09, -0.02), (0.05, 0.11, 0.075), skin,
+    return [ellipsoid((side * 0.485, -0.09, -0.07), (0.05, 0.11, 0.075), skin,
                       rot=rot, detail=18, shine=25, spec=0.1, kind="skin"),
-            ellipsoid((side * 0.522, -0.095, -0.005), (0.014, 0.068, 0.042), inner,
+            ellipsoid((side * 0.522, -0.095, -0.055), (0.014, 0.068, 0.042), inner,
                       rot=rot, detail=14, shine=15, spec=0.05, kind="skin", thin=True)]
 
 
@@ -273,14 +309,14 @@ def earring_meshes(style):
         return []
     out = []
     for s in (-1, 1):
-        lobe = (s * 0.505, -0.19, -0.02)
+        lobe = (s * 0.505, -0.19, -0.07)
         if style == "studs":
             out.append(ellipsoid(lobe, (0.03, 0.03, 0.03), GOLD, detail=12, shine=80, spec=0.6,
                                  kind="glossy"))
         else:
             a = np.linspace(0, 2 * math.pi, 24)
             ring = np.stack([np.full(24, s * 0.515), -0.27 + 0.075 * np.cos(a),
-                             -0.02 + 0.075 * np.sin(a)], -1)
+                             -0.07 + 0.075 * np.sin(a)], -1)
             out.append(tube(ring, np.full(24, 0.008), GOLD, sides=6, cap_ends=False,
                             shine=80, spec=0.6, kind="glossy"))
     return out
@@ -319,8 +355,8 @@ def glasses_meshes(head, style):
             tint = (0.05, 0.06, 0.09) if style == "sun" else (0.10, 0.14, 0.12)
             out.append(ellipsoid((s * EYE_X, EYE_Y + 0.01, zg), (rx - 0.005, ry - 0.005, 0.006),
                                  tint, detail=24, shine=90, spec=0.7, kind="glossy"))
-        temple = catmull([(s * (EYE_X + rx), EYE_Y + 0.01, zg), (s * 0.43, EYE_Y + 0.02, 0.35),
-                          (s * 0.53, EYE_Y, 0.10), (s * 0.54, 0.0, -0.03)], 12)
+        temple = catmull([(s * (EYE_X + rx), EYE_Y + 0.01, zg), (s * 0.48, EYE_Y + 0.02, 0.35),
+                          (s * 0.555, EYE_Y, 0.10), (s * 0.56, 0.0, -0.03)], 12)
         out.append(tube(temple, np.full(12, 0.010), frame, sides=8, **glossy))
     bridge = catmull([(-(EYE_X - rx), EYE_Y + 0.04, zg), (0, EYE_Y + 0.055, zg + 0.015),
                       (EYE_X - rx, EYE_Y + 0.04, zg)], 10)

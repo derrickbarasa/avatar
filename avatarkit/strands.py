@@ -13,14 +13,12 @@ import zlib
 
 import numpy as np
 
-from .head import EYE_X, EYE_Y, MOUTH_Y
+from .head import EYE_X, EYE_Y, HEAD_H, HEAD_Y, MOUTH_Y, SKULL_POWER, skull_radii
 from .mathutil import catmull, smoothstep, unit
 from .mesh import Mesh, grid_faces
 
 DOWN = np.array([0.0, -1.0, 0.0])
 UP = np.array([0.0, 1.0, 0.0])
-HEAD_C = np.array([0.0, 0.02, 0.0])
-HEAD_R = np.array([0.535, 0.665, 0.60])
 CROWN = np.array([0.0, 0.45, -0.15])
 SIDES = 3
 
@@ -56,13 +54,30 @@ def make_locks(root, scale=11):
     return np.unique(key, return_inverse=True)
 
 
+SKULL_CLEARANCE = 1.12           # hair keeps this far (in proportion) from the skull: volume, like real hair has
+_SKULL_C = np.array([0.0, HEAD_Y, 0.0])
+
+
+def _skull_k(q):
+    """How far inside the (slightly enlarged) skull points are: < 1 inside, 1 on the surface, > 1 outside."""
+    q = (q - _SKULL_C) / SKULL_CLEARANCE + _SKULL_C
+    w, front, back = (a[:, 0] for a in np.split(skull_radii(q[:, 1]), 3, axis=-1))
+    depth = np.where(q[:, 2] > 0, front, back)
+    k = (np.abs(q[:, 0]) / np.maximum(w, 1e-6)) ** SKULL_POWER + (np.abs(q[:, 2]) / np.maximum(depth, 1e-6)) ** SKULL_POWER
+    return np.where(np.abs(q[:, 1] - HEAD_Y) < HEAD_H, k, 2.0)
+
+
 def collide(p):
     """Push points out of the head, neck and shoulders (in place)."""
-    q = (p - HEAD_C) / HEAD_R
-    e = (q * q).sum(1)
-    inside = e < 1.0
-    if inside.any():
-        p[inside] = HEAD_C + (p[inside] - HEAD_C) / np.sqrt(np.maximum(e[inside], 1e-9))[:, None]
+    inside = _skull_k(p) < 1.0
+    if inside.any():                             # push straight out from the middle of the head to its surface
+        q = p[inside] - _SKULL_C
+        lo, hi = np.ones(len(q)), np.full(len(q), 4.0)
+        for _ in range(14):                      # the skull is star-shaped, so k grows along every ray
+            mid = (lo + hi) / 2
+            near = _skull_k(_SKULL_C + q * mid[:, None]) < 1.0
+            lo, hi = np.where(near, mid, lo), np.where(near, hi, mid)
+        p[inside] = _SKULL_C + q * hi[:, None]
     y = p[:, 1]
     r = np.hypot(p[:, 0], p[:, 2])
     neck = (y < -0.45) & (y > -0.95) & (r < 0.31)
@@ -503,7 +518,22 @@ class Skin:
 
 
 def _face_region(head):
-    return (head.Z > -0.15) & (head.Y < 0.02) & (head.Y > -0.7)
+    return (head.Z > -0.25) & (head.Y < 0.08) & (head.Y > -0.7)
+
+
+def cheek_line(ax):
+    """Height of the top edge of a beard at distance ax from the middle of the face: level with the mouth
+    corners near the nose, rising to the sideburn at the ear."""
+    return -0.30 + 0.32 * smoothstep(0.18, 0.47, ax)
+
+
+def beard_margin(head):
+    """> 0 over the beard: sideburns, cheeks, chin and the underside of the jaw, clear of the lips."""
+    ax = np.abs(head.X)
+    above = cheek_line(ax) - head.Y                                  # below the cheek line
+    behind = (head.Z + 0.16) * 1.2                                   # stops just behind the ear
+    lips = np.sqrt((head.X / 0.19) ** 2 + ((head.Y - MOUTH_Y) / 0.062) ** 2) - 1     # < 0 on the lips
+    return np.minimum(np.minimum(above, behind), lips * 0.25)
 
 
 def _tangent(vec, nrm):
@@ -524,17 +554,20 @@ def facial_strand_meshes(head, beard_margin, color, with_beard):
     steps = 6
 
     if with_beard:
-        fade = lambda p: rng.random(len(p)) < smoothstep(-0.215, -0.34, p[:, 1]) ** 0.7   # thin out up the cheeks
-        root, nrm = sample_roots(head, beard_margin, 2800, rng, keep=fade, min_margin=0.02)
-        towards_chin = np.stack([-np.sign(root[:, 0]) * 0.35, np.full(len(root), 0.0),
-                                 np.full(len(root), 0.12)], 1)
-        d0 = _tangent(DOWN + towards_chin, nrm)
-        longer = smoothstep(-0.35, -0.62, root[:, 1])
-        length = (0.09 + 0.10 * longer) * (0.85 + 0.3 * rng.random(len(root)))
-        locks = make_locks(root, 16)
-        paths = grow(root, nrm, d0, length, steps, rng, locks, gravity=0.5, wave=0.05, jitter=0.22,
-                     floor=0.25, collider=lambda p: skin.push(p, 0.007))
-        groups.append((paths, locks, 0.0055))
+        # thin out toward the cheek line, so the edge is a soft scatter rather than a cut
+        fade = lambda p: rng.random(len(p)) < smoothstep(0.0, 0.07, cheek_line(np.abs(p[:, 0])) - p[:, 1]) ** 0.7
+        root, nrm = sample_roots(head, beard_margin, 8500, rng, keep=fade, min_margin=0.0)
+        ax, y = np.abs(root[:, 0]), root[:, 1]
+        chin = smoothstep(-0.28, -0.62, y)                                      # 0 up at the cheeks .. 1 at the chin
+        side = smoothstep(0.12, 0.42, ax)                                       # 0 at the middle .. 1 at the jaw's end
+        flow = np.stack([-np.sign(root[:, 0]) * 0.30 * side, np.zeros(len(root)), 0.10 + 0.30 * chin * (1 - side)], 1)
+        d0 = _tangent(DOWN + flow, nrm)
+        length = (0.06 + 0.18 * chin ** 1.2 * (1 - 0.5 * side) + 0.04 * side * chin) \
+            * (0.8 + 0.4 * rng.random(len(root)))
+        locks = make_locks(root, 14)                                            # strands in a lock fall together
+        paths = grow(root, nrm, d0, length, steps, rng, locks, gravity=0.55, wave=0.07, waves=1.5, jitter=0.20,
+                     floor=0.18, collider=lambda p: skin.push(p, 0.008))
+        groups.append((paths, locks, 0.0058))
 
     root, nrm = sample_roots(head, mustache_margin(head), 800, rng, min_margin=0.0)
     sgn = np.where(root[:, 0] >= 0, 1.0, -1.0)

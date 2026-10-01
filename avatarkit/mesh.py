@@ -184,6 +184,24 @@ def tube(points, radii, color, sides=14, **kw):
     return ring_mesh(ring, p, color, **kw)
 
 
+def limb(points, rx, rz, color, off=None, sides=20, **kw):
+    """Tube with an elliptical, off-centre cross-section along a polyline.
+
+    The section's axes stay fixed in the world: `rx` is the half-width across the limb (side to side) and
+    `rz` the half-depth (front to back), both per point; `off` shifts the section forward (+) or back (-),
+    for the bulge of a calf or the flat of a wrist. Used for arms and legs, which hang more or less along y.
+    """
+    p = np.asarray(points, float)
+    t = unit(np.gradient(p, axis=0))
+    lat = unit(np.array([1.0, 0.0, 0.0]) - t * t[:, :1])          # the world's x axis, made square to the limb
+    dep = np.cross(t, lat)
+    ang = np.linspace(0, 2 * math.pi, sides, endpoint=False)
+    centre = p if off is None else p + np.asarray(off, float)[:, None] * dep
+    ring = (centre[:, None] + np.asarray(rx, float)[:, None, None] * np.cos(ang)[None, :, None] * lat[:, None]
+            + np.asarray(rz, float)[:, None, None] * np.sin(ang)[None, :, None] * dep[:, None])
+    return ring_mesh(ring, centre, color, **kw)
+
+
 def loft(ys, a, bf, bb, color, sides=36, power=2.4, **kw):
     """Cross-sections stacked along y: half-width a, front depth bf, back depth bb."""
     ph = np.linspace(0, 2 * math.pi, sides, endpoint=False)
