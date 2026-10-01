@@ -7,17 +7,18 @@ feature from a tabbed side panel, strike a pose, and export the result.
 - **Face:** a skull with a flat-sided cranium, sloping forehead, jaw line and chin (not a ball), with nose, cheekbones, eyes with a procedural iris,
   eyelids and lashes that blink, ears, nostrils, lips with teeth and tongue, six
   expressions, freckles, glasses, earrings.
-- **Hair:** twelve styles built from thousands of real strands (grown from the
+- **Hair:** fourteen styles built from thousands of real strands (grown from the
   scalp, clumped into locks, pushed out of the head, shoulders and chest, with
   anisotropic highlights): short, curly, long, bob, bangs, bun, ponytail, quiff,
-  mohawk, afro. Beards (sideburns, cheeks, chin and under the jaw, thinning toward
-  the cheek line, clear of the lips), moustaches and eyebrows are strands too, hugging the skin.
-  Plus hats: the hair under a hat is only what hangs below its edge.
+  mohawk, afro, pigtails, braid, undercut, wavy. Facial hair is a full beard (sideburns, cheeks, chin and under the jaw, thinning toward
+  the cheek line, clear of the lips), or short stubble or a goatee), a moustache, and eyebrows, all strands hugging the skin.
+  Plus hats (beanie, cap, bucket, top hat, beret, headband): the hair under a hat is only what hangs below its edge.
 - **Body:** three body types, build, height, shoulder and hip width, head size and neck
   length. The torso has a sloping collar, shoulder blades, chest, waist and buttocks. Arms and legs have elliptical, tapering sections (deltoid, biceps, elbow, forearm flattening
   to the wrist, thigh, knee, calf bulging backwards, ankle) with a slight bend, hands with a
   tapering palm, rounded knuckles and fingertips and a thumb that curl into a fist, and shaped feet that join the ankle.
-- **Outfit:** tee, polo, long sleeve, sweater, tank, hoodie, jacket, dress; jeans, shorts, skirt;
+- **Outfit:** tee, polo, long sleeve, sweater, turtleneck, tank, hoodie, jacket, dress; jeans, leggings, wide
+  trousers, shorts, skirt;
   sneakers, boots or barefoot; stripes, dots, plaid or a chest emblem.
 - **Extras:** necklace, scarf, watch, backpack (a rounded bag with a lid flap and pocket, straps over the shoulders).
 - **Poses and life:** relaxed, A-pose, wave, hands on hips, cheer, walk and dance,

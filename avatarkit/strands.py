@@ -443,7 +443,7 @@ def _group_bun(head, margin, rng, steps):
     return pts, make_locks(root), 0.010
 
 
-SWING = {"pigtails": 1.0, "braid": 0.9, "long": 1.0, "bob": 0.8, "bangs": 0.8, "ponytail": 1.0, "curly": 0.3, "afro": 0.15,
+SWING = {"undercut": 0.2, "wavy": 0.9, "pigtails": 1.0, "braid": 0.9, "long": 1.0, "bob": 0.8, "bangs": 0.8, "ponytail": 1.0, "curly": 0.3, "afro": 0.15,
          "short": 0.25, "quiff": 0.2, "mohawk": 0.15, "bun": 0.05}
 
 
@@ -461,6 +461,10 @@ def strand_meshes(head, style, color, margin):
         groups = [_group_long(head, margin, rng, 14, -1.28, 2800, 0.0, 0.10)]
     elif style == "bob":
         groups = [_group_long(head, margin, rng, 11, -0.78, 2400, 0.9, 0.07)]
+    elif style == "wavy":
+        groups = [_group_long(head, margin, rng, 16, -1.0, 2600, 0.7, 0.24)]
+    elif style == "undercut":
+        groups = [_group_short(head, margin, rng, 10, 1600)]
     elif style == "bangs":
         no_fringe = lambda p: ~((p[:, 2] > 0.25) & (p[:, 1] > 0.30))
         groups = [_group_long(head, margin, rng, 11, -0.78, 2200, 0.9, 0.07, keep=no_fringe),
@@ -554,7 +558,11 @@ def mustache_margin(head):
 
 
 def facial_strand_meshes(head, beard_margin, color, with_beard):
-    """Beard (optional) and mustache strands. `beard_margin` > 0 marks the beard area."""
+    """Beard (optional) and mustache strands. `beard_margin` > 0 marks the beard area.
+
+    `with_beard` is False (moustache only), True or "beard" (full beard), "goatee" (the same, over a smaller
+    area) or "stubble" (short, dense, and a shorter moustache)."""
+    stubble = with_beard == "stubble"
     rng = np.random.default_rng(zlib.crc32(b"facial"))
     skin = Skin(head, _face_region(head))
     groups = []
@@ -563,7 +571,7 @@ def facial_strand_meshes(head, beard_margin, color, with_beard):
     if with_beard:
         # thin out toward the cheek line, so the edge is a soft scatter rather than a cut
         fade = lambda p: rng.random(len(p)) < smoothstep(0.0, 0.07, cheek_line(np.abs(p[:, 0])) - p[:, 1]) ** 0.7
-        root, nrm = sample_roots(head, beard_margin, 8500, rng, keep=fade, min_margin=0.0)
+        root, nrm = sample_roots(head, beard_margin, 16000 if stubble else 8500, rng, keep=fade, min_margin=0.0)
         ax, y = np.abs(root[:, 0]), root[:, 1]
         chin = smoothstep(-0.28, -0.62, y)                                      # 0 up at the cheeks .. 1 at the chin
         side = smoothstep(0.12, 0.42, ax)                                       # 0 at the middle .. 1 at the jaw's end
@@ -571,15 +579,17 @@ def facial_strand_meshes(head, beard_margin, color, with_beard):
         d0 = _tangent(DOWN + flow, nrm)
         length = (0.06 + 0.18 * chin ** 1.2 * (1 - 0.5 * side) + 0.04 * side * chin) \
             * (0.8 + 0.4 * rng.random(len(root)))
+        if stubble:
+            length = 0.014 + 0.014 * rng.random(len(root))
         locks = make_locks(root, 14)                                            # strands in a lock fall together
         paths = grow(root, nrm, d0, length, steps, rng, locks, gravity=0.55, wave=0.07, waves=1.5, jitter=0.20,
                      floor=0.18, collider=lambda p: skin.push(p, 0.008))
-        groups.append((paths, locks, 0.0058))
+        groups.append((paths, locks, 0.0068 if stubble else 0.0058))
 
     root, nrm = sample_roots(head, mustache_margin(head), 800, rng, min_margin=0.0)
     sgn = np.where(root[:, 0] >= 0, 1.0, -1.0)
     d0 = _tangent(np.stack([sgn * 0.9, np.full(len(root), -0.45), np.full(len(root), 0.15)], 1), nrm)
-    length = 0.10 * (0.8 + 0.4 * rng.random(len(root)))
+    length = (0.03 if stubble else 0.10) * (0.8 + 0.4 * rng.random(len(root)))
     locks = make_locks(root, 24)
     paths = grow(root, nrm, d0, length, steps, rng, locks, gravity=0.45, wave=0.04, jitter=0.15,
                  floor=0.2, collider=lambda p: skin.push(p, 0.008))

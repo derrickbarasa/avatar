@@ -4,7 +4,7 @@ import math
 import numpy as np
 
 from .head import MOUTH_Y, skull_ring
-from .mathutil import catmull, mix, rot_x, smoothstep
+from .mathutil import catmull, mix, rot_x, rot_z, smoothstep
 from .mesh import Mesh, ellipsoid, grid_faces, loft, tube, unit_sphere_z
 from .strands import beard_margin, facial_strand_meshes, mustache_margin, strand_meshes
 
@@ -15,10 +15,12 @@ HAIRLINES = {  # hairline height at azimuth 0, 40, 80, 110, 150, 180 degrees fro
     "long": [0.36, 0.30, 0.12, -0.02, -0.20, -0.35],
     "afro": [0.34, 0.30, 0.22, 0.15, 0.00, -0.25],
     "bangs": [0.27, 0.27, 0.12, -0.02, -0.20, -0.35],
+    "undercut": [0.36, 0.34, 0.32, 0.30, 0.22, 0.05],     # only the top: the sides and back are shaved
 }
 for _name in ("buzz", "bun", "ponytail", "quiff", "mohawk", "curly", "pigtails", "braid"):
     HAIRLINES[_name] = HAIRLINES["short"]
 HAIRLINES["bob"] = HAIRLINES["long"]
+HAIRLINES["wavy"] = HAIRLINES["long"]
 AZIMUTHS = np.radians([0, 40, 80, 110, 150, 180])
 
 
@@ -28,6 +30,7 @@ HAT_LINES = {  # where a hat's lower edge sits at azimuth 0, 60, 110, 180 degree
     "cap": [0.28, 0.26, 0.16, 0.10],
     "bucket": [0.13] * 4,
     "tophat": [0.20] * 4,
+    "beret": [0.30, 0.25, 0.18, 0.12],
 }
 
 
@@ -45,7 +48,12 @@ def hair_meshes(head, style, color, hat="none"):
             return []
     strands = strand_meshes(head, style, color, margin)
     under = mix(color, (0, 0, 0), 0.38) if strands else color
-    return _under_layer(head, style, under, margin, hat != "none") + strands
+    out = _under_layer(head, style, under, margin, hat != "none") + strands
+    if style == "undercut":                    # the shaved sides: a dark shadow of stubble on the skin
+        shaved = head.Y - np.interp(theta, AZIMUTHS, HAIRLINES["short"])
+        out.append(head.shell(np.minimum(shaved, -margin + 0.05), 0.010, mix(color, (0, 0, 0), 0.3), 0.04,
+                              opacity=0.55, **HAIR))
+    return out
 
 
 def _under_layer(head, style, color, margin, hatted=False):
@@ -67,6 +75,8 @@ def _under_layer(head, style, color, margin, hatted=False):
         out.append(hair_curtain(color, 1.35))
     elif style in ("bob", "bangs") and not hatted:
         out.append(hair_curtain(color, 0.7))
+    elif style == "wavy" and not hatted:
+        out.append(hair_curtain(color, 0.95))
     elif style == "pigtails":
         for s in (-1, 1):
             path = catmull([(s * 0.44, 0.10, -0.28), (s * 0.60, -0.05, -0.32), (s * 0.66, -0.55, -0.28),
@@ -122,6 +132,19 @@ def hat_meshes(head, kind, color):
                loft(np.array([0.21, 0.17]), np.array([0.62, 0.95]), np.array([0.68, 1.02]),
                     np.array([0.68, 1.02]), color, **fabric),
                _hat_band(0.30, 0.13, mix(color, (1, 1, 1), 0.5), fabric, radius=0.10)]
+        return out
+    if kind == "beret":
+        levels = HAT_LINES["beret"]
+        tilt = rot_x(math.radians(-8)) @ rot_z(math.radians(-12))
+        return [head.shell(head.Y - np.interp(theta, keys, levels), 0.05 + 0.03 * top, color, 0.03, **fabric),
+                ellipsoid((0.10, 0.50, -0.02), (0.56, 0.12, 0.56), color, rot=tilt, detail=28, **fabric),
+                ellipsoid((0.10, 0.63, -0.02), (0.03, 0.04, 0.03), mix(color, (0, 0, 0), 0.25), **fabric)]
+    if kind == "headband":
+        phi = np.linspace(math.pi, 3 * math.pi, 48)
+        ring = skull_ring(phi, 0.36, 0.062)                                          # sits on top of the hair's volume
+        out = [tube(ring, np.full(len(phi), 0.03), color, sides=8, cap_ends=False, **fabric)]
+        knot = skull_ring(np.array([math.pi * 0.62]), 0.36, 0.062)[0]                # a little knot at one side
+        out.append(ellipsoid(knot + np.array([0.02, 0.0, 0.0]), (0.06, 0.06, 0.05), mix(color, (0, 0, 0), 0.2), **fabric))
         return out
     levels = HAT_LINES["cap"]
     return [head.shell(head.Y - np.interp(theta, keys, levels), 0.06 + 0.03 * top, color, 0.03, **fabric),
@@ -179,15 +202,18 @@ def facial_hair_meshes(head, style, color):
     """Moustache and beard grown as strands over a thin, darker skin-tone layer."""
     if style == "none":
         return []
-    beard = style == "beard"
+    beard = style in ("beard", "stubble", "goatee")
     dark = mix(color, (0, 0, 0), 0.4)
     margin = np.full(head.Y.shape, -1.0)
     out = []
     if beard:
         margin = beard_margin(head)
-        out.append(head.shell(margin * 0.30, 0.02, dark, 0.03, opacity=0.35, **HAIR))   # a shadow of stubble under the beard
+        if style == "goatee":                                           # just the chin, under the lower lip
+            margin = np.minimum(margin, np.minimum(0.17 - np.abs(head.X), (-0.405 - head.Y) * 1.5))
+        shadow = 0.5 if style == "stubble" else 0.35
+        out.append(head.shell(margin * 0.30, 0.012 if style == "stubble" else 0.02, dark, 0.03, opacity=shadow, **HAIR))
     out.append(head.shell(mustache_margin(head), 0.010, dark, 0.3, **HAIR))
-    out += facial_strand_meshes(head, margin, color, beard)
+    out += facial_strand_meshes(head, margin, color, style if beard else False)
     for m in out:
         m.jaw_follow = True          # the beard moves with the jaw
     return out

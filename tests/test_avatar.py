@@ -716,6 +716,60 @@ class RealismTests(unittest.TestCase):
         big = hand_parts((0, 0, 0), 1, (0.9, 0.7, 0.6), 1.2)[0]
         self.assertGreater(np.ptp(big.v[:, 1]), 1.3 * np.ptp(small.v[:, 1]))
 
+    def test_new_options_were_appended_so_old_share_codes_still_mean_the_same(self):
+        for key, old_last in (("facial", "beard"), ("hair", "braid"), ("hat", "tophat"), ("top", "sweater"),
+                              ("pants", "skirt")):
+            values = [v for _, v in O.choices(key)]
+            self.assertGreater(len(values), values.index(old_last) + 1, key)      # something was added after the old last
+        st = dict(O.DEFAULT_STATE)
+        st.update(hair=13, facial=2, hat=4, top=7, pants=2)                       # the highest values a v1 code could hold
+        again = dict(O.DEFAULT_STATE)
+        O.decode_state(O.encode_state(st), again)
+        self.assertEqual({k: again[k] for k in st}, st)
+        self.assertEqual([n for n, _ in O.choices("hair")][:14], ["Bald", "Buzz", "Short", "Curly", "Long", "Bob", "Bangs",
+                                                                  "Bun", "Ponytail", "Quiff", "Mohawk", "Afro", "Pigtails", "Braid"])
+
+    def test_stubble_is_short_and_dense_and_a_goatee_stays_on_the_chin(self):
+        def roots(kind):
+            m = [m for m in default_rig(facial=kind)["head"].meshes if m.strand and m.part == "facial"][0]
+            v = m.v.reshape(m.n_strands, -1, 3).astype(float)
+            return v[:, 0], np.linalg.norm(v[:, -1] - v[:, 0], axis=1)
+        beard_roots, beard_len = roots("Beard")
+        stub_roots, stub_len = roots("Stubble")
+        goat_roots, _ = roots("Goatee")
+        self.assertLess(np.median(stub_len), 0.4 * np.median(beard_len))
+        self.assertGreater(len(stub_roots), len(beard_roots))
+        chin = goat_roots[goat_roots[:, 1] < -0.3]                                # (the moustache is above the lips)
+        self.assertLess(np.abs(chin[:, 0]).max(), 0.3)                            # nothing out along the jaw
+        self.assertGreater(len(beard_roots[np.abs(beard_roots[:, 0]) > 0.35]), 100)
+
+    def test_undercut_has_hair_only_on_top_and_wavy_is_long(self):
+        top = default_rig(hair="Undercut")["head"].meshes
+        roots = np.concatenate([m.v.reshape(m.n_strands, -1, 3)[:, 0] for m in top if m.strand and m.part == "hair"])
+        self.assertGreater(roots[:, 1].min(), 0.0)                                # nothing grows low on the sides or back
+        wavy = np.concatenate([m.v for m in default_rig(hair="Wavy")["head"].meshes if m.strand and m.part == "hair"])
+        self.assertLess(wavy[:, 1].min(), -0.8)
+
+    def test_beret_and_headband_sit_on_the_head_and_a_turtleneck_covers_the_neck(self):
+        for hat in ("Beret", "Headband"):
+            rig = default_rig(hat=hat, hair="Bald")
+            parts = [m for m in rig["head"].meshes if m.color == O.resolve(dict(O.DEFAULT_STATE))["hatcolor"]
+                     or m.kind == "cloth"]
+            self.assertTrue(parts, hat)
+        plain = default_rig(top="Long sleeve")["torso"].meshes
+        neck = default_rig(top="Turtleneck")["torso"].meshes
+        self.assertGreater(len(neck), len(plain))                                 # the collar is extra geometry
+        self.assertGreater(max(m.v[:, 1].max() for m in neck if m.kind == "cloth"),
+                           max(m.v[:, 1].max() for m in plain if m.kind == "cloth") + 0.15)
+
+    def test_leggings_hug_and_wide_trousers_hang_loose(self):
+        def hem_width(pants):
+            leg = [m for m in default_rig(pants=pants, shoestyle="Barefoot")["shinL"].meshes
+                   if m.kind in ("denim", "cloth")][0].v
+            return np.ptp(leg[leg[:, 1] < leg[:, 1].min() + 0.25, 0])
+        self.assertLess(hem_width("Leggings"), hem_width("Jeans"))
+        self.assertGreater(hem_width("Wide"), hem_width("Jeans"))
+
 
 if __name__ == "__main__":
     unittest.main()

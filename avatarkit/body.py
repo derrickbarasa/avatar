@@ -230,6 +230,8 @@ def build_body(v):
         top, pants, pcol = "tee", "skirt", tcol
     elif top == "polo":
         top = "tee"
+    elif top == "turtleneck":
+        top = "long"
     elif top == "sweater":
         top = "long"
     body_type, build, height = v["bodytype"], v["build"], v["height"]
@@ -244,6 +246,7 @@ def build_body(v):
     if dress:
         hem = -3.4
     pkind = "denim" if pants == "jeans" else "cloth"
+    cut_grow, cut_flare = {"jeans": (0.035, 0.05), "leggings": (0.010, 0.0), "wide": (0.075, 0.15)}.get(pants, (0.035, 0.05))
 
     def garment(mesh, chest=False):
         """Apply the top's print (the emblem only belongs on the chest piece)."""
@@ -301,6 +304,12 @@ def build_body(v):
             ring = np.stack([a[0] * np.sin(phi), np.full(len(phi), hem + 0.02),
                              np.where(np.cos(phi) > 0, bf[0], bb[0]) * np.cos(phi)], -1)
             root.add(tube(ring, np.full(len(phi), 0.055), trim, sides=8, cap_ends=False, **CLOTH))
+    if style == "turtleneck":                       # a rolled collar that hugs the neck
+        ys = np.linspace(-1.12, -0.76, 8)
+        trunk.add(loft(ys, np.full(8, 0.30), np.full(8, 0.245), np.full(8, 0.365), tcol, cap_ends=False, **CLOTH))
+        roll = np.linspace(0, 2 * math.pi, 28, endpoint=False)
+        trunk.add(tube(np.stack([0.30 * np.sin(roll), np.full(28, -0.78), -0.06 + 0.30 * np.cos(roll)], -1),
+                       np.full(28, 0.045), trim, sides=8, cap_ends=False, **CLOTH))
     if pants == "skirt":
         hem_y = -5.45 if dress else -5.05
         ys = np.linspace(-3.2, hem_y, 16)
@@ -433,14 +442,14 @@ def build_body(v):
         thigh.add(limb_mesh(up, skin, **sk), limb_joint(legk[0], skin, **sk))
         shin.add(limb_mesh(lo, skin, **sk), limb_joint(legk[2], skin, **sk))
         trouser = dict(shine=12, spec=0.04, kind=pkind)
-        if pants == "jeans":
+        if pants in ("jeans", "leggings", "wide"):
             tu = leg_curve(legk, 18, 0.0, 2.0)
-            thigh.add(limb_mesh(tu, pcol, 0.035, cap_ends=False, **trouser), limb_joint(legk[0], pcol, 0.035, **trouser))
+            thigh.add(limb_mesh(tu, pcol, cut_grow, cap_ends=False, **trouser), limb_joint(legk[0], pcol, cut_grow, **trouser))
             t_end = 2.9 if shoestyle == "boots" else 3.95                      # tucked into boots
             tl = leg_curve(legk, 20, 2.0, t_end)
-            flare = 0.05 * np.clip((np.linspace(2.0, t_end, 20) - 3.0) / 0.95, 0, 1) ** 1.5   # the hem hangs loose
-            shin.add(limb_mesh(tl, pcol, 0.035 + flare, cap_ends=False, **trouser),
-                     limb_joint(legk[2], pcol, 0.035, **trouser))
+            flare = cut_flare * np.clip((np.linspace(2.0, t_end, 20) - 3.0) / 0.95, 0, 1) ** 1.5   # the hem hangs loose
+            shin.add(limb_mesh(tl, pcol, cut_grow + flare, cap_ends=False, **trouser),
+                     limb_joint(legk[2], pcol, cut_grow, **trouser))
         elif pants == "shorts":
             tu = leg_curve(legk, 14, 0.0, 1.7)
             thigh.add(limb_mesh(tu, pcol, 0.035, cap_ends=False, **trouser), limb_joint(legk[0], pcol, 0.035, **trouser))
