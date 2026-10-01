@@ -4,7 +4,7 @@ import math
 import numpy as np
 
 from .head import GOLD
-from .mathutil import catmull, mix, rot_z
+from .mathutil import catmull, mix, rot_x, rot_z
 from .mesh import ellipsoid, limb, loft, merge, ring_mesh, tube
 from .rig import Rig
 
@@ -54,6 +54,15 @@ class Torso:
         a, bf, bb = self.dims(ys, grow)
         return loft(ys, a, bf, bb, color, **kw)
 
+    def surface(self, ys, phi, grow=0.0, power=2.4):
+        """Points (x, z) on the torso's section at height ys, at angle phi (degrees round the body: 0 = the middle
+        of the chest, 90 = the left side (+x), 180 = the middle of the back), pushed out by `grow`."""
+        ys, ph = np.asarray(ys, float), np.radians(np.asarray(phi, float))
+        a, bf, bb = self.dims(ys, grow)
+        s, c = np.sin(ph), np.cos(ph)
+        e = 2.0 / power
+        return a * np.sign(s) * np.abs(s) ** e, np.where(c > 0, bf, bb) * np.sign(c) * np.abs(c) ** e
+
     def front_z(self, ys, xs=0.0, grow=0.0):
         a, bf, _ = self.dims(ys, grow)
         return bf * np.clip(1 - (np.abs(xs) / a) ** 2.4, 0, 1) ** (1 / 2.4)
@@ -80,19 +89,19 @@ def hand_parts(wrist, side, skin, size=1.0):
     k = 1.5 * size  # hand scale, so the hands match the forearm width
     sk = dict(kind="skin")
 
-    def ball(centre, r):
-        return ellipsoid(centre, (r,) * 3, skin, detail=10, **sk)
+    def ball(centre, r):          # (its poles point along the finger, where they are hidden)
+        return ellipsoid(centre, (r,) * 3, skin, rot=rot_x(math.pi / 2), detail=12, **sk)
 
     # palm: thickness (x) and width (z) per section, from the wrist to the knuckles
-    ys = np.array([-0.04, 0.03, 0.10, 0.165, 0.205]) * k          # starts a little inside the forearm
+    ys = np.array([-0.04, 0.03, 0.09, 0.145, 0.178]) * k          # starts a little inside the forearm
     pts = np.column_stack([np.full(5, wx), wy - ys, np.full(5, wz)])
-    palm = merge([limb(pts, np.array([0.057, 0.052, 0.050, 0.047, 0.040]) * k,
-                       np.array([0.079, 0.083, 0.089, 0.093, 0.090]) * k, skin, sides=16, **sk),
+    palm = merge([limb(pts, np.array([0.046, 0.052, 0.050, 0.047, 0.040]) * k,
+                       np.array([0.066, 0.083, 0.089, 0.093, 0.090]) * k, skin, sides=16, **sk),
                   ellipsoid((wx, wy - 0.085 * k, wz + 0.055 * k), (0.040 * k, 0.078 * k, 0.050 * k), skin,
                             detail=12, **sk)])                       # the pad at the base of the thumb
     fingers = []
-    for code, dz, length in zip(FINGER_CODES[1:], (-0.062, -0.021, 0.021, 0.060), (0.125, 0.145, 0.135, 0.105)):
-        base = np.array([wx, wy - 0.20 * k, wz + dz * k])
+    for code, dz, length in zip(FINGER_CODES[1:], (-0.062, -0.021, 0.021, 0.060), (0.165, 0.190, 0.178, 0.140)):
+        base = np.array([wx, wy - 0.172 * k, wz + dz * k])
         mid = base + np.array([0.0, -0.55 * length * k, 0.0])
         tip = base + np.array([0.0, -length * k, 0.0])
         r0, r1, r2 = 0.0225 * k, 0.0185 * k, 0.0135 * k
@@ -101,9 +110,9 @@ def hand_parts(wrist, side, skin, size=1.0):
         dist = merge([tube(np.linspace(mid, tip, 5), np.linspace(r1, r2, 5), skin, sides=10, thin=True, **sk),
                       ball(mid, r1), ball(tip, r2)])                  # the joint and a rounded tip
         fingers.append((code, prox, dist, base, mid))
-    t0 = np.array([wx, wy - 0.085 * k, wz + 0.080 * k])
-    t1 = np.array([wx - side * 0.012 * k, wy - 0.150 * k, wz + 0.118 * k])
-    t2 = np.array([wx - side * 0.024 * k, wy - 0.215 * k, wz + 0.128 * k])
+    t0 = np.array([wx, wy - 0.075 * k, wz + 0.080 * k])
+    t1 = np.array([wx - side * 0.012 * k, wy - 0.145 * k, wz + 0.120 * k])
+    t2 = np.array([wx - side * 0.024 * k, wy - 0.215 * k, wz + 0.132 * k])
     prox = merge([tube(np.linspace(t0, t1, 5), np.linspace(0.028, 0.023, 5) * k, skin, sides=10, thin=True, **sk),
                   ball(t0, 0.028 * k)])
     dist = merge([tube(np.linspace(t1, t2, 5), np.linspace(0.023, 0.0165, 5) * k, skin, sides=10, thin=True, **sk),
@@ -172,6 +181,16 @@ def limb_mesh(curve, color, grow=0.0, **kw):
     """An arm or leg (or the sleeve / trouser over it, with `grow`: a number or one per point) from a limb curve."""
     r = curve[:, 3] + grow
     return limb(curve[:, :3], r, curve[:, 3] * curve[:, 4] + grow, color, off=curve[:, 5], **kw)
+
+
+def taper_end(curve, lengths=(0.05, 0.10, 0.15), scales=(0.97, 0.80, 0.30)):
+    """The curve continued a little past its end with a shrinking radius, so the limb ends in a closed point that is
+    hidden inside whatever it joins (a forearm inside the palm: no open ring, so no seam line there)."""
+    d = curve[-1, :3] - curve[-2, :3]
+    d = d / max(np.linalg.norm(d), 1e-9)
+    extra = np.array([np.concatenate([curve[-1, :3] + d * s, [curve[-1, 3] * k], curve[-1, 4:]])
+                      for s, k in zip(lengths, scales)])
+    return np.vstack([curve, extra])
 
 
 def limb_joint(key, color, grow=0.0, flat=1.0, drop=0.0, **kw):
@@ -381,16 +400,13 @@ def build_body(v):
         trunk.add(bag_part(top_y, top_y - 0.55, 0.415, depth + 0.03, mix(c, (0, 0, 0), 0.12), **CLOTH))    # the lid flap
         trunk.add(bag_part(bot_y + 0.15, bot_y + 0.85, 0.30, 0.07, strap_c, dz=-depth - 0.04, **CLOTH))    # a pocket
         for s_ in (-1, 1):
-            xs = np.array([0.30, 0.40, 0.50, 0.52, 0.50, 0.55, 0.62, 0.50, 0.38]) * s_
-            ys = np.array([-1.62, -1.30, -1.15, -1.40, -1.85, -2.25, -2.50, -2.80, -2.90])
-            back = np.array([True, True, True, False, False, False, False, True, True])
-            zf = torso.front_z(ys, xs, bulk) + 0.035                                           # on the chest
-            zb = -(torso.dims(ys, bulk)[2] * np.clip(1 - (np.abs(xs) / torso.dims(ys, bulk)[0]) ** 2.4, 0, 1)
-                   ** (1 / 2.4)) - 0.035                                                        # on the back
-            zs = np.where(back, zb, zf)
-            zs[2] = 0.0                                                                         # over the shoulder
-            strap = catmull(np.column_stack([xs, ys, zs]), 30)
-            trunk.add(tube(strap, np.full(30, 0.045), strap_c, sides=8, **CLOTH))
+            # the strap is laid on the torso's own surface: from the top of the bag, over the shoulder, down the
+            # chest, round the side under the arm and back to the bottom of the bag: one continuous band
+            ys = np.array([-1.62, -1.36, -1.17, -1.27, -1.62, -2.05, -2.45, -2.75, -2.93, -3.02])
+            phi = np.array([168.0, 140.0, 104.0, 62.0, 38.0, 36.0, 52.0, 88.0, 122.0, 150.0])
+            xs, zs = torso.surface(ys, phi, bulk + 0.04)
+            strap = catmull(np.column_stack([xs * s_, ys, zs]), 40)
+            trunk.add(tube(strap, np.full(40, 0.045), strap_c, sides=8, **CLOTH))
 
     # --- arms, hands, sleeves ---------------------------------------------------
     for name, s in (("L", 1), ("R", -1)):
@@ -404,7 +420,7 @@ def build_body(v):
                              rig.add_node("foot" + name, legk[4, :3], "shin" + name))
         up, lo = arm_curve(ak, 16, 0.0, 2.0), arm_curve(ak, 18, 2.0, 4.0)
         arm.add(limb_mesh(up, skin, **sk), limb_joint(ak[0], skin, flat=0.82, drop=0.04, **sk))
-        fore.add(limb_mesh(lo, skin, **sk), limb_joint(ak[2], skin, **sk))
+        fore.add(limb_mesh(taper_end(lo), skin, **sk), limb_joint(ak[2], skin, **sk))
         palm, fingers = hand_parts(ak[4, :3], s, skin, radius)
         hand.add(palm)
         for code, prox, dist, knuckle, joint in fingers:

@@ -147,6 +147,7 @@ _DEFS = [
     ("headsize", "Head size", [("Small", 0.92), ("Average", 1.0), ("Large", 1.10)], 1),
     ("neck", "Neck", [("Short", -0.05), ("Average", 0.0), ("Long", 0.11)], 1),
     ("quality", "Quality", [("High", 1.0), ("Balanced", 0.6), ("Fast", 0.3)], 0),
+    ("look", "Look", [("Stylised", False), ("Realistic", True)], 0),
 ]
 
 OPTIONS = [(k, label, opts) for k, label, opts, _ in _DEFS]
@@ -163,7 +164,7 @@ TABS = [
                 "shoestyle", "shoes"]),
     ("Extras", ["necklace", "neckwear", "neckcolor", "scarf", "scarfcolor", "headphones", "watch", "bag",
                 "bagcolor"]),
-    ("Scene", ["pose", "animate", "quality", "shadows", "physics", "bg", "preset"]),
+    ("Scene", ["pose", "animate", "look", "quality", "shadows", "physics", "bg", "preset"]),
     ("Talk", ["voice", "speed", "gestures"]),
     ("Library", []),
 ]
@@ -213,7 +214,7 @@ OPTION_KEYS = [k for k, _, _ in OPTIONS]
 
 # Options that don't change the meshes, so no rebuild is needed when they change.
 TALK_KEYS = {"voice", "speed", "gestures"}
-VIEW_KEYS = {"shadows", "physics", "quality"}        # how it is drawn, not what the avatar is
+VIEW_KEYS = {"shadows", "physics", "quality", "look"}        # how it is drawn, not what the avatar is
 NON_BUILD_KEYS = {"pose", "animate", "bg", "preset"} | TALK_KEYS | VIEW_KEYS
 NO_RANDOM = {"pose", "animate", "bg", "preset"} | TALK_KEYS | VIEW_KEYS
 CODE_KEYS = [k for k in OPTION_KEYS if k not in ("preset", "animate") and k not in TALK_KEYS | VIEW_KEYS]

@@ -105,6 +105,7 @@ uniform sampler2DShadow uAoMap;
 uniform float uAoOn;
 uniform float uAoTexel;
 uniform float uTaps;          // shadow filter radius: 1 = 3x3 taps, 0 = one
+uniform float uReal;          // 1 = the realistic look
 varying vec4 vAO;
 """ + SHADOW_LOOKUP + """
 // Ambient occlusion: how much of the sky is open above this point (a wide, soft shadow from overhead).
@@ -137,6 +138,27 @@ float vnoise(vec2 p) {
                mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
 }
 float disc(float r, float radius) { return 1.0 - smoothstep(radius - 0.012, radius, r); }
+
+// Realistic look: a smooth, physically-flavoured shading instead of toon bands and ink lines.
+float n3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(hash3(i), hash3(i + vec3(1.0, 0.0, 0.0)), f.x),
+                   mix(hash3(i + vec3(0.0, 1.0, 0.0)), hash3(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+               mix(mix(hash3(i + vec3(0.0, 0.0, 1.0)), hash3(i + vec3(1.0, 0.0, 1.0)), f.x),
+                   mix(hash3(i + vec3(0.0, 1.0, 1.0)), hash3(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+}
+// Bend the normal by the slope of fine noise (pores, fabric weave); the slope is carried into eye space.
+vec3 bumpN(vec3 N, vec3 p, float scale, float amount) {
+    vec3 q = p * scale;
+    float e = 0.4;
+    vec3 g = vec3(n3(q + vec3(e, 0.0, 0.0)) - n3(q - vec3(e, 0.0, 0.0)),
+                  n3(q + vec3(0.0, e, 0.0)) - n3(q - vec3(0.0, e, 0.0)),
+                  n3(q + vec3(0.0, 0.0, e)) - n3(q - vec3(0.0, 0.0, e)));
+    g = gl_NormalMatrix * g;
+    return normalize(N - amount * (g - N * dot(g, N)));
+}
 
 void main() {
     vec3 N = normalize(vN);
@@ -209,6 +231,76 @@ void main() {
         float th = atan(vObj.x, vObj.z);
         float strand = hash(vec2(floor(th * 64.0), 3.0));
         base *= 0.80 + 0.30 * strand * 0.6 + 0.35 * vnoise(vec2(th * 30.0, vObj.y * 4.0)) * 0.6;
+    }
+
+
+    // ---- realistic look ---------------------------------------------------------------------------
+    if (uReal > 0.5) {
+        vec3 L0r = normalize(gl_LightSource[0].position.xyz);
+        vec3 L1r = normalize(gl_LightSource[1].position.xyz);
+        vec3 L2r = normalize(gl_LightSource[2].position.xyz);
+        float curv = length(fwidth(N));                                   // high on the nose tip, ears, fingertips
+        vec3 albedo = base;
+        if (isSkin) {
+            N = bumpN(N, vObj, 210.0, 0.11);                              // pores
+            N = bumpN(N, vObj, 64.0, 0.06);                               // fine wrinkles and unevenness
+            albedo *= 1.0 + (n3(vObj * 13.0) - 0.5) * 0.10 + (n3(vObj * 41.0) - 0.5) * 0.05;
+            albedo = mix(albedo, albedo * vec3(1.07, 0.84, 0.82), smoothstep(0.015, 0.09, curv) * 0.5);
+        } else if (isCloth) {
+            N = bumpN(N, vObj, 280.0, 0.10);                              // the weave
+            albedo *= 0.95 + 0.10 * n3(vObj * 150.0);
+        }
+        float ndl = dot(N, L0r);
+        float shr = uShadowOn > 0.5 ? shadowAmount(ndl, uStrand > 0.5 ? 4.0 : 1.0, uStrand > 0.5 ? 0.0 : uTaps) : 1.0;
+        float open = uAoOn > 0.5 ? skyOpen(N, uStrand > 0.5 ? 3.0 : 1.0, uStrand > 0.5 ? 0.0 : 2.0) : 1.0;
+        float ao = mix(isSkin ? 0.58 : 0.66, 1.0, open);
+        float wrap = isSkin ? 0.45 : (isCloth ? 0.22 : 0.10);
+        float dif = clamp((ndl + wrap) / (1.0 + wrap), 0.0, 1.0);
+        float NV = max(dot(N, V), 0.0);
+        float fres = pow(1.0 - NV, 5.0);
+        vec3 H2 = normalize(L0r + V);
+        float nh2 = max(dot(N, H2), 0.0);
+        vec3 sky = mix(vec3(0.62, 0.60, 0.58), vec3(0.78, 0.84, 0.95), N.y * 0.5 + 0.5);
+        vec3 col = albedo * vec3(1.0, 0.95, 0.88) * 0.95 * dif * mix(isSkin ? 0.32 : 0.14, 1.0, shr);
+        col += albedo * sky * 0.34 * ao;                                  // sky and bounce light
+        col += albedo * vec3(0.55, 0.65, 0.85) * 0.22 * max(dot(N, L1r) * 0.5 + 0.5, 0.0) * ao;
+        if (isSkin) {
+            // light bleeding through the skin: a red band where the light fades out, and a glow at thin edges
+            float band = smoothstep(-0.38, 0.10, ndl) * (1.0 - smoothstep(0.05, 0.60, ndl));
+            col += albedo * vec3(0.55, 0.14, 0.07) * band * mix(0.45, 1.0, shr) * 0.50;
+            col += albedo * vec3(0.55, 0.10, 0.04) * smoothstep(0.02, 0.10, curv) * 0.15 * (0.5 + 0.5 * dif);
+            float oil = 0.55 + 0.9 * n3(vObj * 8.0);                      // the shine varies over the face
+            float lobe = pow(nh2, 16.0) * 0.07 + pow(nh2, 90.0) * 0.20;
+            col += vec3(1.0, 0.97, 0.93) * lobe * oil * shr * smoothstep(0.0, 0.25, ndl);
+            col += sky * fres * 0.30 * ao;
+        } else if (isHair && uStrand < 0.5) {                                // the soft mass of hair under the strands
+            col = albedo * (0.40 * ao + 0.85 * dif * mix(0.35, 1.0, shr) * ao) * 1.15 + albedo * sky * 0.10;
+        } else if (isHair) {
+            vec3 T = normalize(vT);
+            float tl = dot(T, L0r);
+            float kkd = sqrt(max(1.0 - tl * tl, 0.0));                    // Kajiya-Kay diffuse along the strand
+            col = albedo * (0.30 * ao + 0.95 * mix(kkd, dif, 0.35) * mix(0.30, 1.0, shr) * ao * 0.9 + sky * 0.12);
+            float th = dot(T, H2);
+            float st = sqrt(max(1.0 - th * th, 0.0));
+            float shift = dot(T, V) * 0.12;
+            float st2 = sqrt(max(1.0 - (th + shift) * (th + shift), 0.0));
+            col += vec3(1.0, 0.97, 0.92) * pow(st, 100.0) * 0.55 * shr * smoothstep(0.0, 0.3, ndl);
+            col += albedo * 1.4 * pow(st2, 24.0) * 0.22 * shr * smoothstep(0.0, 0.3, ndl);
+        } else if (isEye) {
+            col = albedo * (0.50 + 0.62 * dif) * ao;
+            col += vec3(1.0) * (pow(nh2, 260.0) * 2.4 + pow(nh2, 38.0) * 0.20) * ao;    // wet highlight
+            col += sky * fres * 0.45 * ao;
+        } else if (isGlossy) {
+            col += vec3(1.0) * pow(nh2, uShine) * uSpec * 2.0 * shr + sky * fres * 0.35;
+        } else {
+            col += albedo * vec3(0.9, 0.95, 1.0) * pow(1.0 - NV, 3.0) * (isCloth ? 0.20 : 0.05) * ao;   // fabric sheen
+            col += vec3(1.0) * pow(nh2, uShine) * uSpec * 0.8 * shr;
+        }
+        float rimr = pow(1.0 - NV, 3.0) * smoothstep(-0.3, 0.5, dot(N, L2r));
+        col += vec3(0.42, 0.50, 0.70) * rimr * 0.20;
+        col = col / (1.0 + 0.10 * col);                                   // a soft shoulder so highlights roll off
+        gl_FragColor = vec4(col, vColor.a);
+        return;
     }
 
     // ---- lighting: soft toon bands, tinted shadows, fill and rim ---------
@@ -434,7 +526,7 @@ class Renderer:
         loc = lambda p, names: {n: glGetUniformLocation(p, n) for n in names}
         self.u = loc(self.prog, ("uKind", "uSpec", "uShine", "uColor2", "uPattern", "uFreckle", "uCenter",
                                  "uStrand", "uLightVP", "uInvView", "uShadow", "uShadowOn", "uShadowTexel",
-                                 "uAoVP", "uAoMap", "uAoOn", "uAoTexel", "uTaps") + disp)
+                                 "uAoVP", "uAoMap", "uAoOn", "uAoTexel", "uTaps", "uReal") + disp)
         self.ou = loc(self.oprog, ("uPx", "uViewH", "uOutline") + disp)
         self.du = loc(self.dprog, disp)
         self.gu = loc(self.gprog, ("uLightVP", "uInvView", "uShadow", "uShadowOn", "uShadowTexel"))
@@ -450,6 +542,7 @@ class Renderer:
         self.target_fbo = 0            # where the scene is drawn (an off-screen buffer for hi-res captures)
         self.px_scale = 1.0            # outline width multiplier when supersampling
         self.quality = 1.0
+        self.real = False
         self.offscreen = None
         self._buffers = weakref.WeakKeyDictionary()   # mesh -> its vertex data on the graphics card
         self._dead = []                               # buffers of meshes that no longer exist, freed on the next frame
@@ -472,7 +565,7 @@ class Renderer:
     # ---- scene ---------------------------------------------------------------
     def draw_scene(self, rig, pose, cam, bg, size, blink=0.0, transparent=False, reserved=0,
                    gaze=(0.0, 0.0), lid=0.0, jaw=0.0, swing=(0.0, 0.0, 0.0), shadows=True, quality=1.0,
-                   reuse_shadows=False):
+                   reuse_shadows=False, real=False):
         """Draw into the whole window; `reserved` px on the right (the UI card) are kept free by
         shifting the lens, so the avatar stays centred in the remaining area.
 
@@ -483,6 +576,7 @@ class Renderer:
         camera direction: a second picture of the frame that was just drawn).
         """
         self.quality = quality
+        self.real = bool(real)
         self._free_dead_buffers()
         w, h = size
         self.view_h = float(h)
@@ -515,7 +609,8 @@ class Renderer:
             glBindTexture(GL_TEXTURE_2D, self.ao.tex if self.ao.ok else 0)
             glActiveTexture(GL_TEXTURE0)
         self._ground(rig.ground_y, use_shadow)
-        self._outline_pass(rig, pose)
+        if not self.real:                        # the realistic look has no inked lines
+            self._outline_pass(rig, pose)
         self._main_pass(rig, pose, use_shadow)
 
     def _light_matrices(self, view, rig):
@@ -638,6 +733,7 @@ class Renderer:
         glUniformMatrix4fv(u["uAoVP"], 1, GL_TRUE, self.ao_vp.astype(np.float32))
         glUniform1i(u["uAoMap"], 2)
         glUniform1f(u["uAoOn"], 1.0 if (use_shadow and self.ao.ok and self.quality >= 1.0) else 0.0)
+        glUniform1f(u["uReal"], 1.0 if self.real else 0.0)
         glUniform1f(u["uAoTexel"], 1.0 / self.ao.size)
         glUniform1f(u["uTaps"], 1.0 if self.quality >= 1.0 else 0.0)
         self._set_displacement(u)

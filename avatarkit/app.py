@@ -705,7 +705,8 @@ class App:
     def look(self):
         """Extra draw parameters: jaw drop, hair sway and whether shadows are on."""
         r = O.resolve(self.state)
-        return {"jaw": self.jaw, "swing": self.hair.swing, "shadows": r["shadows"], "quality": r["quality"]}
+        return {"jaw": self.jaw, "swing": self.hair.swing, "shadows": r["shadows"], "quality": r["quality"],
+                "real": r["look"]}
 
     def live_state(self, t):
         speech = tt = emote = None

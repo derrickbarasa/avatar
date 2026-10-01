@@ -789,6 +789,36 @@ class RealismTests(unittest.TestCase):
             self.assertGreater(outer, 0.5)                                         # sticks out past the skull's side
             self.assertTrue(all(np.sign(m.v[:, 0].mean()) == side for m in parts))
 
+    def test_the_realistic_look_is_a_draw_setting_not_part_of_the_avatar(self):
+        self.assertEqual([n for n, _ in O.choices("look")], ["Stylised", "Realistic"])
+        self.assertFalse(O.resolve(dict(O.DEFAULT_STATE))["look"])                   # the cartoon look stays the default
+        self.assertIn("look", O.NON_BUILD_KEYS)                                       # switching it rebuilds nothing
+        self.assertNotIn("look", O.CODE_KEYS)                                         # ... and is not in share codes
+        st = dict(O.DEFAULT_STATE)
+        st["look"] = 1
+        self.assertEqual(O.encode_state(st), O.encode_state(dict(O.DEFAULT_STATE)))
+        rng = random.Random(3)
+        for _ in range(20):
+            O.randomize(st, rng)
+            self.assertEqual(st["look"], 1)                                           # randomising keeps your look
+        self.assertIn("look", [k for _, keys in O.TABS for k in keys])                # it is on a tab
+
+    def test_backpack_straps_lie_on_the_torso_all_the_way_round(self):
+        from avatarkit.body import Torso
+        from avatarkit.mathutil import mix
+        rig = default_rig(bag="Backpack", hair="Bald")
+        strap_colour = mix(O.resolve(dict(O.DEFAULT_STATE))["bagcolor"], (0, 0, 0), 0.35)
+        straps = [m for m in rig["torso"].meshes if np.allclose(m.color, strap_colour) and np.ptp(m.v[:, 1]) > 1.2]
+        self.assertEqual(len(straps), 2)                                              # one over each shoulder
+        torso = Torso(O.resolve(dict(O.DEFAULT_STATE))["bodytype"], 1.0)
+        from avatarkit.body import LIFT
+        for strap in straps:
+            v = strap.v.astype(float)
+            a, front, back = torso.dims(v[:, 1] - LIFT)
+            k = (np.abs(v[:, 0]) / a) ** 2.4 + (np.abs(v[:, 2]) / np.where(v[:, 2] > 0, front, back)) ** 2.4
+            self.assertGreater(k.min(), 0.9)                       # never sunk into the body (so no stub hidden/poking)
+            self.assertLess(np.median(k), 1.5)                     # ... and hugging it, not floating off
+
 
 if __name__ == "__main__":
     unittest.main()

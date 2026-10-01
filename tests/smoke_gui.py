@@ -172,6 +172,20 @@ assert a.speaking
 key(pygame.K_ESCAPE)
 assert not a.speaking
 
+# -- the realistic look ------------------------------------------------------------------------------------------
+tab("Scene")
+click(("choose", "look", 1))
+assert O.resolve(a.state)["look"] is True
+frame(4)
+n_before = len(os.listdir(exports))
+a.export_named("png")
+frame(3)
+assert len(os.listdir(exports)) > n_before, "a picture should export in the realistic look"
+click(("choose", "look", 0))
+assert O.resolve(a.state)["look"] is False
+frame(2)
+tab("Talk")
+
 # -- virtual webcam and microphone (stand-in driver and voice) -------------------------------------------------
 import types  # noqa: E402
 

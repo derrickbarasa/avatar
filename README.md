@@ -189,6 +189,10 @@ packs are reported at startup and never stop the good ones loading.
   that swings when the head moves (Shadows / Hair physics in the Scene tab).
 - PNG exports and `--bare` screenshots are drawn 3x larger off-screen and shrunk for smooth
   edges; PNG exports are twice the window's pixel size.
+- **Look** (Scene tab): *Stylised* (the inked, cel-shaded cartoon, the default) or *Realistic*: smooth
+  lighting with light bleeding through the skin, pores and fine skin texture, a varying oily shine, wet
+  eyes, soft strand highlights for hair, a woven look and sheen for fabric, and no ink lines. It is only a
+  drawing setting: it is not part of a share code, and the avatar's shape is the same.
 - **Quality** (Scene tab): High, Balanced or Fast. Lower settings draw fewer hair strands, use a
   smaller shadow filter and drop ambient occlusion, for slower graphics cards. Exported pictures
   always use the best quality. `python tests/bench_gui.py` prints frame times for each setting.
