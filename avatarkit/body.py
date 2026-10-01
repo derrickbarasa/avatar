@@ -332,13 +332,34 @@ def build_body(v):
     if v["bag"] != "none":
         c = v["bagcolor"]
         strap_c = mix(c, (0, 0, 0), 0.35)
-        z_back = -(float(torso.dims(-2.1)[2]) + bulk + 0.24)
-        trunk.add(ellipsoid((0, -2.15, z_back), (0.50, 0.70, 0.26), c, detail=26, **CLOTH))
-        trunk.add(ellipsoid((0, -2.55, z_back - 0.18), (0.30, 0.22, 0.10), strap_c, detail=16, **CLOTH))
-        for s in (-1, 1):
-            strap = catmull([(s * 0.42, -1.35, -0.42), (s * 0.50, -1.16, -0.03), (s * 0.44, -1.55, 0.32),
-                             (s * 0.62, -2.25, 0.12), (s * 0.48, -2.7, -0.40)], 26)
-            trunk.add(tube(strap, np.full(26, 0.05), strap_c, sides=8, **CLOTH))
+        top_y, bot_y = -1.45, -3.10
+        _, _, bb_mid = torso.dims(np.array([-1.9, -2.2]), bulk)
+        z_mid = -(float(bb_mid.max()) + 0.0)                      # the bag rests on the shoulder blades
+
+        def bag_part(y0, y1, half_w, depth, color, dz=0.0, n=9, **kw):
+            """A rounded slab between two heights, as a loft (its ends are rounded off, not cut flat)."""
+            ys = np.linspace(y0, y1, n)
+            u = np.linspace(-1.0, 1.0, n)
+            round_ends = np.maximum(1.0 - np.abs(u) ** 6, 0.0) ** 0.5 * 0.85 + 0.15
+            m = loft(ys, half_w * (0.8 + 0.2 * round_ends), depth * round_ends, depth * round_ends, color, **kw)
+            m.v[:, 2] += z_mid - depth + dz                      # sits against the back, bulging outward
+            return m
+
+        depth = 0.24
+        trunk.add(bag_part(top_y, bot_y, 0.40, depth, c, **CLOTH))
+        trunk.add(bag_part(top_y, top_y - 0.55, 0.415, depth + 0.03, mix(c, (0, 0, 0), 0.12), **CLOTH))    # the lid flap
+        trunk.add(bag_part(bot_y + 0.15, bot_y + 0.85, 0.30, 0.07, strap_c, dz=-depth - 0.04, **CLOTH))    # a pocket
+        for s_ in (-1, 1):
+            xs = np.array([0.30, 0.40, 0.50, 0.52, 0.50, 0.55, 0.62, 0.50, 0.38]) * s_
+            ys = np.array([-1.62, -1.30, -1.15, -1.40, -1.85, -2.25, -2.50, -2.80, -2.90])
+            back = np.array([True, True, True, False, False, False, False, True, True])
+            zf = torso.front_z(ys, xs, bulk) + 0.035                                           # on the chest
+            zb = -(torso.dims(ys, bulk)[2] * np.clip(1 - (np.abs(xs) / torso.dims(ys, bulk)[0]) ** 2.4, 0, 1)
+                   ** (1 / 2.4)) - 0.035                                                        # on the back
+            zs = np.where(back, zb, zf)
+            zs[2] = 0.0                                                                         # over the shoulder
+            strap = catmull(np.column_stack([xs, ys, zs]), 30)
+            trunk.add(tube(strap, np.full(30, 0.045), strap_c, sides=8, **CLOTH))
 
     # --- arms, hands, sleeves ---------------------------------------------------
     for name, s in (("L", 1), ("R", -1)):

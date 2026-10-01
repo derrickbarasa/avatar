@@ -13,6 +13,7 @@ import zlib
 
 import numpy as np
 
+from .body import LIFT, Torso
 from .head import EYE_X, EYE_Y, HEAD_H, HEAD_Y, MOUTH_Y, SKULL_POWER, skull_radii
 from .mathutil import catmull, smoothstep, unit
 from .mesh import Mesh, grid_faces
@@ -54,6 +55,9 @@ def make_locks(root, scale=11):
     return np.unique(key, return_inverse=True)
 
 
+TORSO_POWER = 2.4                    # the exponent mesh.loft draws the torso's sections with
+_TORSO = Torso((1.0, 1.0, 1.0, 1.0, 0.0, 1.0), 1.0)      # an average body; hair rests on a shirt over it
+_TORSO_CLEARANCE = 0.05
 SKULL_CLEARANCE = 1.12           # hair keeps this far (in proportion) from the skull: volume, like real hair has
 _SKULL_C = np.array([0.0, HEAD_Y, 0.0])
 
@@ -85,15 +89,18 @@ def collide(p):
         f = 0.31 / np.maximum(r[neck], 1e-6)
         p[neck, 0] *= f
         p[neck, 2] *= f
-    yy = np.clip(-0.72 - y, 0, None)
-    a = np.minimum(0.30 + yy * 2.0, 0.93) + 0.03
-    b = np.minimum(0.27 + yy * 0.35, 0.42) + 0.03
-    k = (p[:, 0] / a) ** 2 + (p[:, 2] / b) ** 2
-    body = (y < -0.70) & (k < 1.0)
-    if body.any():
-        s = np.sqrt(np.maximum(k[body], 1e-6))
-        p[body, 0] /= s
-        p[body, 2] /= s
+    low = y < -0.70
+    if low.any():                                # the shoulders and chest: the torso's own (flat-sided) sections
+        q = p[low]
+        a, front, back = _TORSO.dims(q[:, 1] - LIFT, _TORSO_CLEARANCE)
+        depth = np.where(q[:, 2] > 0, front, back)
+        k = (np.abs(q[:, 0]) / a) ** TORSO_POWER + (np.abs(q[:, 2]) / depth) ** TORSO_POWER
+        inside = k < 1.0
+        if inside.any():
+            sc = np.maximum(k[inside], 1e-9) ** (1.0 / TORSO_POWER)
+            q[inside, 0] /= sc
+            q[inside, 2] /= sc
+            p[low] = q
     return p
 
 

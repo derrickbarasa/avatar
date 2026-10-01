@@ -685,6 +685,18 @@ class RealismTests(unittest.TestCase):
                 for axis in (0, 2):                                      # across and front to back
                     self.assertGreaterEqual(np.ptp(skirt[:, axis]), np.ptp(skin[:, axis]), (body, top, axis))
 
+    def test_long_hair_rests_on_the_shoulders_instead_of_passing_through_the_shirt(self):
+        from avatarkit.body import LIFT
+        from avatarkit.strands import _TORSO, TORSO_POWER
+        for hair in ("Long", "Bob"):
+            v = default_rig(hair=hair)["head"].meshes
+            v = np.concatenate([m.v for m in v if m.strand and m.part == "hair"]).astype(float)
+            v = v[v[:, 1] < -0.75]
+            self.assertGreater(len(v), 1000, hair)                        # plenty of hair down there
+            a, front, back = _TORSO.dims(v[:, 1] - LIFT, -0.03)       # tips may drift a few mm after the collision
+            k = (np.abs(v[:, 0]) / a) ** TORSO_POWER + (np.abs(v[:, 2]) / np.where(v[:, 2] > 0, front, back)) ** TORSO_POWER
+            self.assertLess((k < 1.0).mean(), 0.01, hair)                 # <1% of it is more than 3 cm inside the body
+
 
 if __name__ == "__main__":
     unittest.main()

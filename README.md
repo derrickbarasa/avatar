@@ -8,7 +8,7 @@ feature from a tabbed side panel, strike a pose, and export the result.
   eyelids and lashes that blink, ears, nostrils, lips with teeth and tongue, six
   expressions, freckles, glasses, earrings.
 - **Hair:** twelve styles built from thousands of real strands (grown from the
-  scalp, clumped into locks, pushed out of the head and shoulders, with
+  scalp, clumped into locks, pushed out of the head, shoulders and chest, with
   anisotropic highlights): short, curly, long, bob, bangs, bun, ponytail, quiff,
   mohawk, afro. Beards (sideburns, cheeks, chin and under the jaw, thinning toward
   the cheek line, clear of the lips), moustaches and eyebrows are strands too, hugging the skin.
@@ -19,7 +19,7 @@ feature from a tabbed side panel, strike a pose, and export the result.
   fingers, and shaped feet that join the ankle.
 - **Outfit:** tee, polo, long sleeve, sweater, tank, hoodie, jacket, dress; jeans, shorts, skirt;
   sneakers, boots or barefoot; stripes, dots, plaid or a chest emblem.
-- **Extras:** necklace, scarf, watch, backpack.
+- **Extras:** necklace, scarf, watch, backpack (a rounded bag with a lid flap and pocket, straps over the shoulders).
 - **Poses and life:** relaxed, A-pose, wave, hands on hips, cheer, walk and dance,
   plus idle animation: breathing sway, head movement, blinking and darting
   eye glances.
